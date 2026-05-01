@@ -86,7 +86,13 @@ Supported adapter IDs:
 
 ## Validation
 
-Run syntax checks:
+Run the full validation suite:
+
+```bash
+npm run validate
+```
+
+Run syntax checks directly:
 
 ```bash
 node --check scripts/generate-agent-repo-index.mjs
@@ -104,9 +110,13 @@ node scripts/self-test.mjs
 
 The smoke test covers adapter alias normalization, explicit missing-config failures, service-root discovery, and env/config supplemental scanning.
 
+GitHub Actions runs `npm run validate` on pushes to `main` and on pull requests.
+
 ## Project Layout
 
 - `SKILL.md`: Agent Skills entrypoint and usage workflow.
+- `package.json`: local validation and generator scripts.
+- `CONTRIBUTING.md`: contribution and validation guidance.
 - `scripts/generate-agent-repo-index.mjs`: CLI entrypoint and orchestration.
 - `scripts/self-test.mjs`: local smoke tests.
 - `src/core.mjs`: config loading, discovery context, filesystem walking, shared helpers, and stable output writing.

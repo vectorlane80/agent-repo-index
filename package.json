@@ -1,0 +1,17 @@
+{
+  "name": "agent-repo-index",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent Skills-compatible repository index generator for AI coding agents.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "check": "node --check scripts/generate-agent-repo-index.mjs && node --check scripts/self-test.mjs && node --check src/core.mjs && node --check src/adapters.mjs && node --check src/writers.mjs",
+    "test": "node scripts/self-test.mjs",
+    "validate": "npm run check && npm test",
+    "generate": "node scripts/generate-agent-repo-index.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
