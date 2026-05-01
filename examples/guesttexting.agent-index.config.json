@@ -1,0 +1,71 @@
+{
+  "output": ".agent-index",
+  "include": ["backend/src", "frontend/src", "azure-pipelines.yml", "docker-compose.yml", "package.json"],
+  "exclude": ["node_modules", "dist", "build", ".git", ".angular", ".next", "coverage", "worktrees"],
+  "adapters": ["auto"],
+  "roots": {
+    "backend": "backend/src",
+    "frontend": "frontend/src",
+    "angularRoutes": "frontend/src/app/app.routes.ts",
+    "typeormEntities": "backend/src/database/entities",
+    "i18n": "frontend/src/assets/i18n",
+    "frontendServices": "frontend/src/app/services"
+  },
+  "featureHints": {
+    "admin": {
+      "paths": ["frontend/src/app/pages/admin", "frontend/src/app/pages/admin-users", "frontend/src/app/pages/admin-settings", "frontend/src/app/pages/admin-departments", "frontend/src/app/pages/admin-dispositions", "frontend/src/app/pages/admin-automation"],
+      "services": ["frontend/src/app/services/admin.service.ts"],
+      "entities": ["user", "phone-number"]
+    },
+    "ai-intelligence": {
+      "paths": ["frontend/src/app/pages/templates"],
+      "services": ["frontend/src/app/services/template.service.ts", "frontend/src/app/services/integrations.service.ts"],
+      "entities": ["ai-engine"]
+    },
+    "auth": {
+      "paths": ["frontend/src/app/pages/login", "frontend/src/app/core/auth.interceptor.ts", "frontend/src/app/guards/auth.guard.ts"],
+      "services": ["frontend/src/app/services/auth.service.ts"],
+      "entities": ["user", "refresh-token", "auth-provider-config", "auth-setting"]
+    },
+    "health": {
+      "paths": ["frontend/src/app/services/build-handshake.service.ts"],
+      "services": ["frontend/src/app/services/build-handshake.service.ts"],
+      "entities": []
+    },
+    "integrations": {
+      "paths": ["frontend/src/app/pages/admin/sections/system-crm", "frontend/src/app/pages/admin/sections/system-reservation-vm", "frontend/src/app/pages/admin/sections/system-reservation-hapi"],
+      "services": ["frontend/src/app/services/integrations.service.ts"],
+      "entities": ["crm-connection", "intelligence-setting", "ops-integration-audit"]
+    },
+    "messaging": {
+      "paths": ["frontend/src/app/pages/inbox", "frontend/src/app/pages/conversation"],
+      "services": ["frontend/src/app/services/messaging.service.ts"],
+      "entities": ["conversation", "conversation-activity", "guest", "message", "phone-number"]
+    },
+    "pms": {
+      "paths": ["frontend/src/app/pages/admin/sections/system-reservation-vm", "frontend/src/app/pages/admin/sections/system-reservation-hapi"],
+      "services": ["frontend/src/app/services/messaging.service.ts"],
+      "entities": []
+    },
+    "templates": {
+      "paths": ["frontend/src/app/pages/templates"],
+      "services": ["frontend/src/app/services/template.service.ts"],
+      "entities": ["template", "template-translation"]
+    },
+    "tenants": {
+      "paths": ["frontend/src/app/pages/admin/sections/system-properties", "frontend/src/app/pages/admin-settings"],
+      "services": ["frontend/src/app/services/tenant.service.ts", "frontend/src/app/services/system-admin-state.service.ts"],
+      "entities": ["tenant", "tenant-history", "property-lifecycle-event"]
+    },
+    "usage": {
+      "paths": ["frontend/src/app/pages/reports", "frontend/src/app/pages/system-reports", "frontend/src/app/pages/dashboard"],
+      "services": ["frontend/src/app/services/usage.service.ts"],
+      "entities": ["usage-rollup"]
+    },
+    "users": {
+      "paths": ["frontend/src/app/pages/admin-users"],
+      "services": ["frontend/src/app/services/admin.service.ts"],
+      "entities": ["user", "user-audit-event"]
+    }
+  }
+}
