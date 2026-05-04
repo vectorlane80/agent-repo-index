@@ -6,9 +6,10 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "check": "node --check scripts/generate-agent-repo-index.mjs && node --check scripts/self-test.mjs && node --check src/core.mjs && node --check src/adapters.mjs && node --check src/writers.mjs",
+    "check": "node --check scripts/generate-agent-repo-index.mjs && node --check scripts/verify-index-completeness.mjs && node --check scripts/self-test.mjs && node --check src/core.mjs && node --check src/adapters.mjs && node --check src/writers.mjs",
     "test": "node scripts/self-test.mjs",
-    "validate": "npm run check && npm test",
+    "check:index-completeness": "node scripts/verify-index-completeness.mjs --root . --output .agent-index-verify --run-generator --verify-determinism --cleanup",
+    "validate": "npm run check && npm test && npm run check:index-completeness",
     "generate": "node scripts/generate-agent-repo-index.mjs"
   },
   "engines": {

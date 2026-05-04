@@ -40,26 +40,116 @@ export function extractHttpRoutes(content) {
   return out;
 }
 
+export function extractDotnetControllerPath(content, controllerName) {
+  const routeMatch = content.match(/\[Route\(\s*"([^"]*)"\s*\)\]/);
+  const fallback = `[controller]`;
+  return (routeMatch?.[1] || fallback)
+    .replace(/\[controller\]/gi, controllerName.replace(/Controller$/, ''))
+    .replace(/\[action\]/gi, '');
+}
+
+export function extractDotnetHandlerName(content, startIndex) {
+  const window = content.slice(startIndex, startIndex + 1600);
+  const match = window.match(/(?:public|private|protected|internal)\s+(?:async\s+)?(?:[A-Za-z0-9_<>,?.\[\]\s]+\s+)?([A-Za-z0-9_]+)\s*\(/);
+  return match ? match[1] : '-';
+}
+
+export function extractDotnetHttpRoutes(content) {
+  const methodMap = {
+    HttpGet: 'GET',
+    HttpPost: 'POST',
+    HttpPut: 'PUT',
+    HttpPatch: 'PATCH',
+    HttpDelete: 'DELETE',
+    HttpOptions: 'OPTIONS',
+    HttpHead: 'HEAD'
+  };
+  const out = [];
+  const regex = /\[(HttpGet|HttpPost|HttpPut|HttpPatch|HttpDelete|HttpOptions|HttpHead)(?:\(\s*"([^"]*)"\s*\))?\]/g;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    out.push({ method: methodMap[match[1]] || 'GET', methodPath: match[2] || '', handler: extractDotnetHandlerName(content, regex.lastIndex) });
+  }
+  return out;
+}
+
+export function extractDotnetMinimalApiRoutes(content) {
+  const out = [];
+  const regex = /\.Map(Get|Post|Put|Patch|Delete)\s*\(\s*"([^"]+)"/g;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    out.push({ method: match[1].toUpperCase(), methodPath: match[2], handler: 'minimal-api' });
+  }
+  return out;
+}
+
 export function getRouteRows(ctx) {
-  if (!adapterEnabled(ctx, 'nestjs') || !ctx.detected.nestjs) return [];
-  const files = ctx.allFiles.filter((f) => f.endsWith('.controller.ts') || /@Controller\s*\(/.test(read(f))).sort();
   const rows = [];
-  for (const file of files) {
-    const content = read(file);
-    const controllerPath = extractControllerPath(content);
-    const controllerName = path.basename(file).replace(/\.controller\.ts$/, '').replace(/\.(ts|tsx|js|jsx)$/, '');
-    for (const route of extractHttpRoutes(content)) {
-      const fullPath = normalizeRoute(controllerPath, route.methodPath);
-      rows.push({
-        method: route.method,
-        path: fullPath,
-        comparablePath: normalizeComparableRoute(fullPath),
-        controller: controllerName,
-        handler: route.handler,
-        file: relFromRoot(ctx, file)
-      });
+
+  if (adapterEnabled(ctx, 'nestjs') && ctx.detected.nestjs) {
+    const files = ctx.allFiles.filter((f) => f.endsWith('.controller.ts') || /@Controller\s*\(/.test(read(f))).sort();
+    for (const file of files) {
+      const content = read(file);
+      const controllerPath = extractControllerPath(content);
+      const controllerName = path.basename(file).replace(/\.controller\.ts$/, '').replace(/\.(ts|tsx|js|jsx)$/, '');
+      for (const route of extractHttpRoutes(content)) {
+        const fullPath = normalizeRoute(controllerPath, route.methodPath);
+        rows.push({
+          method: route.method,
+          path: fullPath,
+          comparablePath: normalizeComparableRoute(fullPath),
+          controller: controllerName,
+          handler: route.handler,
+          file: relFromRoot(ctx, file)
+        });
+      }
     }
   }
+
+  if (adapterEnabled(ctx, 'dotnet') && ctx.detected.dotnet) {
+    const files = ctx.allFiles.filter((f) => /\.cs$/.test(f)).filter((file) => {
+      const rel = relFromRoot(ctx, file);
+      if (/Controller\.cs$/.test(rel) || /(^|\/)Program\.cs$/.test(rel)) return true;
+      const content = read(file);
+      return /\[ApiController\]|ControllerBase|\.Map(Get|Post|Put|Patch|Delete)\(/.test(content);
+    }).sort();
+
+    for (const file of files) {
+      const content = read(file);
+      const rel = relFromRoot(ctx, file);
+
+      if (/Controller\.cs$/.test(rel) || /\[ApiController\]|ControllerBase/.test(content)) {
+        const controllerName = (content.match(/class\s+([A-Za-z0-9_]+Controller)\b/) || [null, path.basename(file, '.cs')])[1];
+        const controllerPath = extractDotnetControllerPath(content, controllerName);
+        for (const route of extractDotnetHttpRoutes(content)) {
+          const fullPath = normalizeRoute(controllerPath, route.methodPath);
+          rows.push({
+            method: route.method,
+            path: fullPath,
+            comparablePath: normalizeComparableRoute(fullPath),
+            controller: controllerName.replace(/Controller$/, ''),
+            handler: route.handler,
+            file: rel
+          });
+        }
+      }
+
+      if (/(^|\/)Program\.cs$/.test(rel) || /\.Map(Get|Post|Put|Patch|Delete)\(/.test(content)) {
+        for (const route of extractDotnetMinimalApiRoutes(content)) {
+          const fullPath = normalizeRoute('', route.methodPath);
+          rows.push({
+            method: route.method,
+            path: fullPath,
+            comparablePath: normalizeComparableRoute(fullPath),
+            controller: 'Program',
+            handler: route.handler,
+            file: rel
+          });
+        }
+      }
+    }
+  }
+
   return rows.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
 }
 
@@ -167,22 +257,108 @@ export function extractRelations(content) {
   return out;
 }
 
-export function getEntityRows(ctx) {
-  if (!adapterEnabled(ctx, 'typeorm') || !ctx.detected.typeorm) return [];
-  const files = ctx.allFiles.filter((file) => file.endsWith('.entity.ts') || /@Entity\s*\(/.test(read(file))).sort();
+export function extractDotnetPrimaryKeys(content, className) {
+  const keys = [...content.matchAll(/\[Key\][\s\S]{0,200}?public\s+[A-Za-z0-9_<>,?.\[\]]+\s+([A-Za-z0-9_]+)\s*\{\s*get;\s*set;\s*\}/g)].map((m) => m[1]);
+  const conventional = [...content.matchAll(/public\s+[A-Za-z0-9_<>,?.\[\]]+\s+([A-Za-z0-9_]+)\s*\{\s*get;\s*set;\s*\}/g)]
+    .map((m) => m[1])
+    .filter((name) => name === 'Id' || name === `${className}Id`);
+  return uniq([...keys, ...conventional]);
+}
+
+export function extractDotnetColumns(content, className) {
+  const primitiveTypes = new Set(['string', 'int', 'long', 'short', 'bool', 'DateTime', 'decimal', 'double', 'float', 'Guid', 'byte[]', 'TimeSpan']);
+  const out = [];
+  const regex = /public\s+([A-Za-z0-9_<>,?.\[\]]+)\s+([A-Za-z0-9_]+)\s*\{\s*get;\s*set;\s*\}/g;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const fieldType = match[1].replace(/\?$/, '');
+    const name = match[2];
+    const collection = /^(ICollection|IEnumerable|List)<.+>$/.test(fieldType);
+    const primitive = primitiveTypes.has(fieldType) || /^Nullable<.+>$/.test(fieldType);
+    if (name === className) continue;
+    if (collection || (!primitive && !name.endsWith('Id'))) {
+      out.push({ name, type: fieldType, kind: 'relation', notes: collection ? 'collection' : 'navigation' });
+    }
+    else {
+      out.push({ name, type: fieldType, kind: 'column', notes: '-' });
+    }
+  }
+  return out;
+}
+
+export function getDotnetEntityRows(ctx) {
+  if (!adapterEnabled(ctx, 'dotnet') || !ctx.detected.dotnet) return [];
+  const files = ctx.allFiles.filter((file) => /\.cs$/.test(file)).filter((file) => {
+    const rel = relFromRoot(ctx, file);
+    if (/Controller\.cs$/.test(rel) || /(^|\/)Program\.cs$/.test(rel) || /(^|\/)Migrations\//.test(rel)) return false;
+    const content = read(file);
+    return /\[Table\(|\[Key\]|DbSet<|public\s+class\s+[A-Za-z0-9_]+/.test(content) && /(^|\/)(Entities|Models)\//i.test(rel);
+  }).sort();
+
   return files.map((file) => {
     const content = read(file);
-    const fallback = path.basename(file).replace(/\.entity\.ts$/, '').replace(/\.(ts|js)$/, '');
+    const className = (content.match(/public\s+class\s+([A-Za-z0-9_]+)/) || [null, path.basename(file, '.cs')])[1];
+    const tableName = (content.match(/\[Table\(\s*"([^"]+)"\s*\)\]/) || [null, className])[1];
+    const members = extractDotnetColumns(content, className);
     return {
-      className: (content.match(/export\s+class\s+([A-Za-z0-9_]+)/) || [null, fallback])[1],
-      fallback,
-      tableName: extractEntityName(content, fallback),
-      pks: extractPrimaryKeys(content),
-      cols: extractColumns(content),
-      rels: extractRelations(content),
+      className,
+      fallback: className,
+      tableName,
+      pks: extractDotnetPrimaryKeys(content, className),
+      cols: members.filter((m) => m.kind === 'column'),
+      rels: members.filter((m) => m.kind === 'relation'),
       file: relFromRoot(ctx, file)
     };
   });
+}
+
+export function getSqlEntityRows(ctx) {
+  if (!adapterEnabled(ctx, 'sql') || !ctx.detected.sql) return [];
+  const files = ctx.allFiles.filter((file) => /\.sql$/i.test(file)).sort();
+  const rows = [];
+  const regex = /\b(?:create|alter)(?:\s+or\s+alter)?\s+(procedure|proc|function|view|table|trigger)\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/ig;
+  for (const file of files) {
+    const content = read(file);
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+      const objectType = match[1].toLowerCase() === 'proc' ? 'procedure' : match[1].toLowerCase();
+      const objectName = match[2];
+      const line = content.slice(0, match.index).split(/\r?\n/).length;
+      rows.push({
+        className: objectName,
+        fallback: objectName,
+        tableName: objectName,
+        pks: [],
+        cols: [{ name: 'object_type', type: objectType, kind: 'sql-object', notes: `line ${line}` }],
+        rels: [],
+        file: relFromRoot(ctx, file)
+      });
+    }
+  }
+  return rows;
+}
+
+export function getEntityRows(ctx) {
+  const rows = [];
+  if (adapterEnabled(ctx, 'typeorm') && ctx.detected.typeorm) {
+    const files = ctx.allFiles.filter((file) => file.endsWith('.entity.ts') || /@Entity\s*\(/.test(read(file))).sort();
+    for (const file of files) {
+      const content = read(file);
+      const fallback = path.basename(file).replace(/\.entity\.ts$/, '').replace(/\.(ts|js)$/, '');
+      rows.push({
+        className: (content.match(/export\s+class\s+([A-Za-z0-9_]+)/) || [null, fallback])[1],
+        fallback,
+        tableName: extractEntityName(content, fallback),
+        pks: extractPrimaryKeys(content),
+        cols: extractColumns(content),
+        rels: extractRelations(content),
+        file: relFromRoot(ctx, file)
+      });
+    }
+  }
+  rows.push(...getDotnetEntityRows(ctx));
+  rows.push(...getSqlEntityRows(ctx));
+  return rows;
 }
 
 export function getComponentRows(ctx) {
@@ -237,7 +413,7 @@ export function getFeatureRows(ctx, routeRows, entityRows, componentRows) {
       ensure(featureNameFromRel(rel)).tests.add(rel);
       continue;
     }
-    if (/\.(controller|service|module)\.[jt]s$/.test(rel)) ensure(featureNameFromRel(rel)).backendFiles.add(rel);
+    if (/\.(controller|service|module)\.[jt]s$/.test(rel) || /Controller\.cs$/.test(rel) || /(^|\/)Program\.cs$/.test(rel) || /\.sql$/i.test(rel)) ensure(featureNameFromRel(rel)).backendFiles.add(rel);
     if (/\/(pages|components|routes|app)\//.test(rel) || rel.endsWith('.component.ts')) ensure(featureNameFromRel(rel)).frontendPaths.add(rel);
   }
 
@@ -367,16 +543,30 @@ export function getApiClientRows(ctx, routeRows) {
 }
 
 export function getTestRows(ctx) {
-  const sourceFiles = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
+  const sourceFiles = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
   const testFiles = new Set(ctx.allFiles.filter((f) => isTestFile(relFromRoot(ctx, f))).map((f) => relFromRoot(ctx, f)));
+  const testList = [...testFiles];
   return sourceFiles.map((file) => {
     const rel = relFromRoot(ctx, file);
     const dir = path.dirname(rel);
     const ext = path.extname(rel);
     const base = rel.slice(0, -ext.length);
-    const directCandidates = [`${base}.spec${ext}`, `${base}.test${ext}`, `${dir}/__tests__/${path.basename(base)}.spec${ext}`, `${dir}/__tests__/${path.basename(base)}.test${ext}`];
-    const direct = directCandidates.find((candidate) => testFiles.has(candidate)) || '';
-    const nearby = [...testFiles].filter((spec) => spec.startsWith(`${dir}/`) && spec !== direct).slice(0, 5);
+    const directCandidates = [
+      `${base}.spec${ext}`,
+      `${base}.test${ext}`,
+      `${dir}/__tests__/${path.basename(base)}.spec${ext}`,
+      `${dir}/__tests__/${path.basename(base)}.test${ext}`,
+      `${base}Tests.cs`,
+      `${base}Test.cs`,
+      `${base}Specs.cs`,
+      `${dir}/${path.basename(base)}Tests.cs`
+    ];
+    let direct = directCandidates.find((candidate) => testFiles.has(candidate)) || '';
+    if (!direct && ext === '.cs') {
+      const baseName = path.basename(base);
+      direct = testList.find((candidate) => /(^|\/)(tests?|test-projects)\//i.test(candidate) && new RegExp(`${baseName}(Test|Tests|Spec|Specs)\\.cs$`, 'i').test(path.basename(candidate))) || '';
+    }
+    const nearby = testList.filter((spec) => spec.startsWith(`${dir}/`) && spec !== direct).slice(0, 5);
     return { source: rel, lines: lineCount(file), directSpec: direct, nearbySpecs: nearby };
   });
 }
@@ -388,7 +578,10 @@ export function extractLandmarks(file) {
     [/export\s+class\s+([A-Za-z0-9_]+)/, 'class'],
     [/export\s+function\s+([A-Za-z0-9_]+)/, 'fn'],
     [/^\s{2,}(?:async\s+)?([A-Za-z0-9_]+)\s*\([^)]*\)\s*(?::[^{]+)?\{/, 'method'],
-    [/^\s{2,}(?:readonly\s+)?([A-Za-z0-9_]+)\s*=\s*(?:computed|signal|new\s+BehaviorSubject)/, 'state']
+    [/^\s{2,}(?:readonly\s+)?([A-Za-z0-9_]+)\s*=\s*(?:computed|signal|new\s+BehaviorSubject)/, 'state'],
+    [/public\s+class\s+([A-Za-z0-9_]+)/, 'class'],
+    [/public\s+(?:async\s+)?(?:[A-Za-z0-9_<>,?.\[\]]+\s+)+([A-Za-z0-9_]+)\s*\(/, 'method'],
+    [/\b(?:create|alter)(?:\s+or\s+alter)?\s+(?:procedure|proc|function|view|table|trigger)\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/i, 'sql']
   ];
   for (let i = 0; i < lines.length; i += 1) {
     for (const [regex, label] of patterns) {
@@ -406,7 +599,7 @@ export function extractLandmarks(file) {
 export function getLargeFileRows(ctx) {
   const threshold = Number(ctx.config.largeFileThreshold || 300);
   return ctx.allFiles
-    .filter((f) => /\.(ts|tsx|js|jsx|html|scss|css|json|resx|yml|yaml)$/.test(f))
+    .filter((f) => /\.(ts|tsx|js|jsx|html|scss|css|json|resx|yml|yaml|cs|csproj|sql|sqlproj)$/.test(f))
     .map((file) => ({ file, rel: relFromRoot(ctx, file), lines: lineCount(file), landmarks: extractLandmarks(file) }))
     .filter((row) => row.lines >= threshold)
     .sort((a, b) => b.lines - a.lines || a.rel.localeCompare(b.rel));
@@ -460,6 +653,8 @@ export function getEnvRows(ctx) {
     /process\.env\.([A-Z0-9_]+)/g,
     /process\.env\[['"]([A-Z0-9_]+)['"]\]/g,
     /ConfigService[^\n]+get(?:OrThrow)?\(['"]([A-Z0-9_]+)['"]\)/g,
+    /Configuration\[['"]([A-Z0-9_:]+)['"]\]/g,
+    /GetValue<[^>]+>\(['"]([A-Z0-9_:]+)['"]\)/g,
     /\$\(([A-Z0-9_]+)\)/g,
     /\$\{([A-Z0-9_]+)\}/g
   ];
@@ -498,6 +693,9 @@ export function collectEnvConfigFiles(ctx) {
     'azure-pipelines.yaml',
     'docker-compose.yml',
     'docker-compose.yaml',
+    'appsettings.json',
+    'appsettings.Development.json',
+    'appsettings.Production.json',
     'package.json',
     'backend/package.json',
     'frontend/package.json'

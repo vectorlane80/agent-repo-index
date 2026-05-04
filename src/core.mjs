@@ -18,10 +18,35 @@ export const DEFAULT_EXCLUDES = [
   '.cache'
 ];
 
-export const DEFAULT_INCLUDE_HINTS = ['src', 'app', 'lib', 'server', 'client', 'backend/src', 'frontend/src', 'packages', 'apps'];
-export const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.html', '.scss', '.css', '.resx', '.yml', '.yaml', '.env', '.example']);
+export const DEFAULT_INCLUDE_HINTS = ['src', 'app', 'lib', 'server', 'client', 'backend/src', 'frontend/src', 'packages', 'apps', 'Api', 'Services', 'tests'];
+export const SOURCE_EXTENSIONS = new Set([
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.json',
+  '.html',
+  '.scss',
+  '.css',
+  '.resx',
+  '.yml',
+  '.yaml',
+  '.env',
+  '.example',
+  '.cs',
+  '.csproj',
+  '.sln',
+  '.props',
+  '.targets',
+  '.config',
+  '.cshtml',
+  '.sql',
+  '.sqlproj'
+]);
 export const HTTP_METHODS = { Get: 'GET', Post: 'POST', Put: 'PUT', Patch: 'PATCH', Delete: 'DELETE', Options: 'OPTIONS', Head: 'HEAD', Sse: 'SSE' };
-export const ADAPTER_IDS = ['nestjs', 'angular', 'typeorm', 'resx', 'env', 'tests', 'large-files', 'exports', 'api-client'];
+export const ADAPTER_IDS = ['nestjs', 'angular', 'typeorm', 'dotnet', 'sql', 'resx', 'env', 'tests', 'large-files', 'exports', 'api-client'];
 
 export function normalizeAdapterId(value) {
   const raw = String(value || '').trim();
@@ -32,7 +57,12 @@ export function normalizeAdapterId(value) {
     large_files: 'large-files',
     test: 'tests',
     typeOrm: 'typeorm',
-    type_orm: 'typeorm'
+    type_orm: 'typeorm',
+    csharp: 'dotnet',
+    aspnet: 'dotnet',
+    asp_net: 'dotnet',
+    mssql: 'sql',
+    database: 'sql'
   };
   return aliases[raw] || raw;
 }
@@ -163,7 +193,7 @@ export function candidateIncludeRoots(ctx) {
   const configured = ctx.include.map((rel) => path.resolve(ctx.rootDir, rel)).filter((p) => fs.existsSync(p));
   if (configured.length > 0) return configured;
   const hinted = DEFAULT_INCLUDE_HINTS.map((rel) => path.resolve(ctx.rootDir, rel)).filter((p) => fs.existsSync(p));
-  return hinted.length > 0 ? hinted : [ctx.rootDir];
+  return hinted.length > 0 ? uniq([...hinted, ctx.rootDir]) : [ctx.rootDir];
 }
 
 export function walk(dirPath, ctx, visit) {
@@ -194,7 +224,10 @@ export function isLikelySourceFile(filePath) {
 }
 
 export function isTestFile(rel) {
-  return /(^|\/)__tests__\//.test(rel) || /\.(spec|test)\.[jt]sx?$/.test(rel);
+  return /(^|\/)__tests__\//.test(rel)
+    || /\.(spec|test)\.[jt]sx?$/.test(rel)
+    || /(^|\/)(tests?|test-projects)\//i.test(rel)
+    || /(Tests?|Specs?)\.cs$/i.test(rel);
 }
 
 export function relFromRoot(ctx, filePath) {
@@ -209,6 +242,8 @@ export function discoverRoots(ctx) {
   const cfg = ctx.config.roots || {};
   const files = ctx.allFiles.map((file) => ({ abs: file, rel: relFromRoot(ctx, file) }));
   const controller = files.find((f) => f.rel.endsWith('.controller.ts'));
+  const dotnetProgram = files.find((f) => /(^|\/)Program\.cs$/.test(f.rel));
+  const dotnetController = files.find((f) => /Controller\.cs$/.test(f.rel));
   const component = files.find((f) => f.rel.endsWith('.component.ts'));
   const routeFile = firstExisting(ctx, cfg.angularRoutes)
     || files.find((f) => /(^|\/)app\.routes\.ts$/.test(f.rel))?.abs
@@ -225,7 +260,10 @@ export function discoverRoots(ctx) {
     || '';
 
   return {
-    backend: firstExisting(ctx, cfg.backend) || inferRootFromFile(ctx, controller?.abs, ['backend/src', 'src']) || '',
+    backend: firstExisting(ctx, cfg.backend)
+      || inferRootFromFile(ctx, controller?.abs, ['backend/src', 'src'])
+      || inferRootFromFile(ctx, dotnetProgram?.abs || dotnetController?.abs, ['src'])
+      || '',
     frontend: firstExisting(ctx, cfg.frontend) || inferRootFromFile(ctx, component?.abs || routeFile, ['frontend/src', 'src']) || '',
     angularRoutes: routeFile,
     typeormEntities: entityDir,
@@ -266,10 +304,16 @@ export function commonDir(dirs) {
 export function detectAdapters(ctx) {
   const pkgText = JSON.stringify({ ...(ctx.packageJson.dependencies || {}), ...(ctx.packageJson.devDependencies || {}) });
   const contentNeedle = (pattern) => ctx.allFiles.some((file) => pattern.test(read(file)));
+  const hasDotnetProjectFile = ctx.allFiles.some((f) => /\.(csproj|sln|props|targets)$/i.test(f));
+  const hasDotnetSdk = ctx.allFiles.some((f) => /\.csproj$/i.test(f) && /Microsoft\.NET\.Sdk/.test(read(f)));
+  const hasAspNetMarkers = ctx.allFiles.some((f) => /\.cs$/i.test(f) && /(\[ApiController\]|ControllerBase|Map(Get|Post|Put|Patch|Delete))/m.test(read(f)));
+  const hasSqlScripts = ctx.allFiles.some((f) => /\.sql$/i.test(f));
   return {
     nestjs: /@nestjs\//.test(pkgText) || ctx.allFiles.some((f) => f.endsWith('.controller.ts')) || contentNeedle(/@Controller\s*\(/),
     angular: /@angular\//.test(pkgText) || Boolean(ctx.roots.angularRoutes) || ctx.allFiles.some((f) => f.endsWith('.component.ts')),
     typeorm: /typeorm/.test(pkgText) || ctx.allFiles.some((f) => f.endsWith('.entity.ts')) || contentNeedle(/@Entity\s*\(/),
+    dotnet: hasDotnetProjectFile || hasDotnetSdk || hasAspNetMarkers,
+    sql: hasSqlScripts,
     resx: ctx.allFiles.some((f) => f.endsWith('.resx')),
     env: true,
     tests: true,

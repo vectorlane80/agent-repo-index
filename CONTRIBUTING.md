@@ -19,6 +19,7 @@ This runs syntax checks for every script/module and then executes the smoke test
 - Prefer small adapters and writers over hardcoded project-specific paths.
 - Add config examples instead of baking private repo assumptions into generator logic.
 - Keep missing or partially detected frameworks graceful; empty adapters should not crash generation.
+- Never silently modify instruction files. Any `AGENTS.md`/`CLAUDE.md` update behavior must be explicit opt-in (flag or interactive confirmation).
 - Update `README.md` and `SKILL.md` when CLI flags, config shape, outputs, or workflow expectations change.
 
 ## Testing New Repo Shapes

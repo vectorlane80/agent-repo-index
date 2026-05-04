@@ -2,7 +2,7 @@
 
 Agent Repo Index is an Agent Skills-compatible repository indexing skill for AI coding agents. It generates stable markdown maps that help an agent understand a codebase before doing broad search or opening large numbers of files.
 
-The current implementation is optimized for JavaScript and TypeScript application repos, especially NestJS, Angular, TypeORM, localization-heavy projects, env/config-heavy projects, and testable monorepos.
+The current implementation is optimized for JavaScript/TypeScript, .NET, and SQL-heavy application repos, especially NestJS, Angular, TypeORM, ASP.NET Core APIs, database script repositories, localization-heavy projects, env/config-heavy projects, and testable monorepos.
 
 ## Quick Start
 
@@ -20,6 +20,27 @@ Then read:
 
 `START_HERE.md` routes the agent to the smallest useful generated map for the current task.
 
+## Agent Integration
+
+After index generation, the CLI always prints the recommended agent-instruction line.
+
+If `AGENTS.md` or `CLAUDE.md` exists at repo root and the terminal is interactive, the CLI also offers to append that line for you.
+
+For non-interactive or scripted usage, you can choose explicit behavior:
+
+- Auto-append when possible: `--update-agent-instructions`
+- Suppress interactive prompt: `--no-agent-instruction-offer`
+
+The generator only targets `AGENTS.md` and `CLAUDE.md` at repo root; it does not modify other instruction files.
+
+Recommended routing line:
+
+```md
+If `.agent-index/START_HERE.md` exists, read it first and follow its routing before broad repo search.
+```
+
+This keeps behavior explicit and portable across agent ecosystems.
+
 ## Outputs
 
 The generator writes deterministic markdown files under `.agent-index/` by default:
@@ -27,7 +48,7 @@ The generator writes deterministic markdown files under `.agent-index/` by defau
 - `START_HERE.md`: task router and index inventory.
 - `routes.md`: NestJS controller routes when detected.
 - `pages.md`: Angular route map when detected.
-- `schema.md`: TypeORM entity summary when detected.
+- `schema.md`: TypeORM entities, .NET entities, and SQL object summaries when detected.
 - `components.md`: Angular component index when detected.
 - `lib.md`: exported classes, functions, interfaces, types, enums, and constants.
 - `feature-map.md`: inferred feature-to-first-read map plus configured hints.
@@ -75,6 +96,8 @@ Supported adapter IDs:
 - `nestjs`
 - `angular`
 - `typeorm`
+- `dotnet`
+- `sql`
 - `resx`
 - `env`
 - `tests`
@@ -82,7 +105,7 @@ Supported adapter IDs:
 - `exports`
 - `api-client`
 
-`apiClient` and `largeFiles` are accepted as compatibility aliases.
+`apiClient`, `largeFiles`, `csharp`, and `aspnet` are accepted as compatibility aliases.
 
 ## Validation
 
@@ -96,6 +119,7 @@ Run syntax checks directly:
 
 ```bash
 node --check scripts/generate-agent-repo-index.mjs
+node --check scripts/verify-index-completeness.mjs
 node --check scripts/self-test.mjs
 node --check src/core.mjs
 node --check src/adapters.mjs
@@ -106,6 +130,12 @@ Run the built-in smoke test:
 
 ```bash
 node scripts/self-test.mjs
+```
+
+Run an index completeness audit (count match + digest match + deterministic rerun):
+
+```bash
+npm run check:index-completeness
 ```
 
 The smoke test covers adapter alias normalization, explicit missing-config failures, service-root discovery, and env/config supplemental scanning.

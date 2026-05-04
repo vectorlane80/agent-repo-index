@@ -15,7 +15,7 @@ import {
 
 export function generateRoutesMd(ctx, rows) {
   const lines = [heading(ctx, 'Backend Routes'), ''];
-  if (rows.length === 0) lines.push('No NestJS controller routes detected.', '');
+  if (rows.length === 0) lines.push('No backend routes detected.', '');
   else {
     lines.push('| Method | Path | Controller | Handler | Source |', '|---|---|---|---|---|');
     for (const row of rows) lines.push(`| ${row.method} | ${code(row.path)} | ${mdCell(row.controller)} | ${mdCell(row.handler)} | ${row.file} |`);
@@ -36,8 +36,8 @@ export function generatePagesMd(ctx, rows) {
 }
 
 export function generateSchemaMd(ctx, rows) {
-  const lines = [heading(ctx, 'TypeORM Schema'), ''];
-  if (rows.length === 0) lines.push('No TypeORM entities detected.', '');
+  const lines = [heading(ctx, 'Entity Schema'), ''];
+  if (rows.length === 0) lines.push('No entities detected.', '');
   for (const entity of rows) {
     lines.push(`## ${entity.className} (table: ${code(entity.tableName)})`, '', `Source: ${entity.file}`, '');
     lines.push('| Field | Type | Kind | Notes |', '|---|---|---|---|');
@@ -67,7 +67,17 @@ export function extractExports(content) {
     [/export\s+interface\s+([A-Za-z0-9_]+)/g, 'interface'],
     [/export\s+type\s+([A-Za-z0-9_]+)/g, 'type'],
     [/export\s+enum\s+([A-Za-z0-9_]+)/g, 'enum'],
-    [/export\s+const\s+([A-Za-z0-9_]+)/g, 'const']
+    [/export\s+const\s+([A-Za-z0-9_]+)/g, 'const'],
+    [/public\s+(?:static\s+)?class\s+([A-Za-z0-9_]+)/g, 'class'],
+    [/public\s+interface\s+([A-Za-z0-9_]+)/g, 'interface'],
+    [/public\s+enum\s+([A-Za-z0-9_]+)/g, 'enum'],
+    [/public\s+record\s+([A-Za-z0-9_]+)/g, 'record'],
+    [/public\s+(?:async\s+)?(?:[A-Za-z0-9_<>,?.\[\]]+\s+)+([A-Za-z0-9_]+)\s*\(/g, 'method'],
+    [/\b(?:create|alter)(?:\s+or\s+alter)?\s+procedure\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/gi, 'sql procedure'],
+    [/\b(?:create|alter)(?:\s+or\s+alter)?\s+function\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/gi, 'sql function'],
+    [/\b(?:create|alter)(?:\s+or\s+alter)?\s+view\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/gi, 'sql view'],
+    [/\b(?:create|alter)(?:\s+or\s+alter)?\s+table\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/gi, 'sql table'],
+    [/\b(?:create|alter)(?:\s+or\s+alter)?\s+trigger\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/gi, 'sql trigger']
   ];
   const items = [];
   for (const [regex, label] of patterns) {
@@ -78,7 +88,7 @@ export function extractExports(content) {
 }
 
 export function generateLibMd(ctx) {
-  const files = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
+  const files = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs|sql)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
   const lines = [heading(ctx, 'Library Exports'), ''];
   for (const file of files) {
     const exports = extractExports(read(file));
@@ -88,7 +98,7 @@ export function generateLibMd(ctx) {
     if (exports.length > 30) lines.push(`- ... ${exports.length - 30} more`);
     lines.push('');
   }
-  if (lines.length === 2) lines.push('No exported JS/TS symbols detected.', '');
+  if (lines.length === 2) lines.push('No exported/public symbols detected.', '');
   return lines.join('\n');
 }
 

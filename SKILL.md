@@ -1,6 +1,6 @@
 ---
 name: agent-repo-index
-description: Generate and use reusable `.agent-index` repository navigation maps for JavaScript/TypeScript projects. Use when an AI coding agent needs to index a repo, refresh navigation files, reduce broad codebase exploration, inspect NestJS routes, Angular pages/components, TypeORM entities, API client/backend mappings, tests, large files, exports, i18n, or env/config references.
+description: Generate and use reusable `.agent-index` repository navigation maps for JavaScript/TypeScript, .NET, and SQL-heavy projects. Use when an AI coding agent needs to index a repo, refresh navigation files, reduce broad codebase exploration, inspect NestJS routes, Angular pages/components, TypeORM entities, ASP.NET routes/entities, SQL objects/scripts, API client/backend mappings, tests, large files, exports, i18n, or env/config references.
 compatibility: Requires Node.js 18+ and filesystem access to the repository being indexed. Uses only local file reads/writes and git metadata when available.
 ---
 
@@ -13,6 +13,11 @@ Run the bundled generator from the repository root. Script paths are relative to
 ```bash
 node scripts/generate-agent-repo-index.mjs --root /path/to/repo --output .agent-index
 ```
+
+Optional behavior flags for agent-instruction integration:
+
+- `--update-agent-instructions`: append the recommended line to repo-root `AGENTS.md` and/or `CLAUDE.md` when present.
+- `--no-agent-instruction-offer`: disable interactive prompt.
 
 Then read `.agent-index/START_HERE.md` before broad repo searches. It routes task types to the smallest useful generated map.
 
@@ -75,10 +80,13 @@ Pass `--include-generated-date` only when volatile timestamps are acceptable in 
 
 ## Workflow
 
+0. The CLI prints a recommended routing line after generation and, in interactive terminals, offers to append it to repo-root `AGENTS.md`/`CLAUDE.md` when present.
 1. If `.agent-index/START_HERE.md` is missing or stale, regenerate the index.
 2. Read `.agent-index/START_HERE.md`.
 3. Read only the specific maps it points to for the current task.
 4. Fall back to broad repo search only after the maps fail to answer the routing question.
+
+Use `--update-agent-instructions` for non-interactive automation when you want the line appended automatically.
 
 ## Validation
 
