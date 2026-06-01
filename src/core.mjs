@@ -18,7 +18,7 @@ export const DEFAULT_EXCLUDES = [
   '.cache'
 ];
 
-export const DEFAULT_INCLUDE_HINTS = ['src', 'app', 'lib', 'server', 'client', 'backend/src', 'frontend/src', 'packages', 'apps', 'Api', 'Services', 'tests'];
+export const DEFAULT_INCLUDE_HINTS = ['src', 'app', 'lib', 'server', 'client', 'backend/src', 'frontend/src', 'packages', 'apps', 'Api', 'Services', 'routes', 'database', 'resources', 'config', 'tests'];
 export const SOURCE_EXTENSIONS = new Set([
   '.ts',
   '.tsx',
@@ -43,10 +43,11 @@ export const SOURCE_EXTENSIONS = new Set([
   '.config',
   '.cshtml',
   '.sql',
-  '.sqlproj'
+  '.sqlproj',
+  '.php'
 ]);
 export const HTTP_METHODS = { Get: 'GET', Post: 'POST', Put: 'PUT', Patch: 'PATCH', Delete: 'DELETE', Options: 'OPTIONS', Head: 'HEAD', Sse: 'SSE' };
-export const ADAPTER_IDS = ['nestjs', 'angular', 'typeorm', 'dotnet', 'sql', 'resx', 'env', 'tests', 'large-files', 'exports', 'api-client'];
+export const ADAPTER_IDS = ['nestjs', 'angular', 'typeorm', 'dotnet', 'php', 'sql', 'resx', 'env', 'tests', 'large-files', 'exports', 'api-client'];
 
 export function normalizeAdapterId(value) {
   const raw = String(value || '').trim();
@@ -61,6 +62,8 @@ export function normalizeAdapterId(value) {
     csharp: 'dotnet',
     aspnet: 'dotnet',
     asp_net: 'dotnet',
+    laravel: 'php',
+    symfony: 'php',
     mssql: 'sql',
     database: 'sql'
   };
@@ -227,7 +230,9 @@ export function isTestFile(rel) {
   return /(^|\/)__tests__\//.test(rel)
     || /\.(spec|test)\.[jt]sx?$/.test(rel)
     || /(^|\/)(tests?|test-projects)\//i.test(rel)
-    || /(Tests?|Specs?)\.cs$/i.test(rel);
+    || /(Tests?|Specs?)\.cs$/i.test(rel)
+    || /(^|\/)(tests?|specs?)\//i.test(rel) && /\.php$/i.test(rel)
+    || /(Test|Spec)\.php$/i.test(rel);
 }
 
 export function relFromRoot(ctx, filePath) {
@@ -244,7 +249,15 @@ export function discoverRoots(ctx) {
   const controller = files.find((f) => f.rel.endsWith('.controller.ts'));
   const dotnetProgram = files.find((f) => /(^|\/)Program\.cs$/.test(f.rel));
   const dotnetController = files.find((f) => /Controller\.cs$/.test(f.rel));
+  const phpController = files.find((f) => /(^|\/)(app|src)\/.*Controller\.php$/.test(f.rel));
   const component = files.find((f) => f.rel.endsWith('.component.ts'));
+  const phpRouteFile = firstExisting(ctx, cfg.phpRoutes)
+    || files.find((f) => /(^|\/)routes\/(?:api|web|console|channels)\.php$/.test(f.rel))?.abs
+    || files.find((f) => /\.php$/.test(f.rel) && /\bRoute::/.test(read(f.abs)))?.abs
+    || '';
+  const phpModelDir = firstExisting(ctx, cfg.phpModels)
+    || commonDir(files.filter((f) => /(^|\/)app\/Models\/[^/]+\.php$/.test(f.rel)).map((f) => path.dirname(f.abs)))
+    || '';
   const routeFile = firstExisting(ctx, cfg.angularRoutes)
     || files.find((f) => /(^|\/)app\.routes\.ts$/.test(f.rel))?.abs
     || files.find((f) => /\.routes\.ts$/.test(f.rel) && /path\s*:/.test(read(f.abs)))?.abs
@@ -263,12 +276,15 @@ export function discoverRoots(ctx) {
     backend: firstExisting(ctx, cfg.backend)
       || inferRootFromFile(ctx, controller?.abs, ['backend/src', 'src'])
       || inferRootFromFile(ctx, dotnetProgram?.abs || dotnetController?.abs, ['src'])
+      || inferRootFromFile(ctx, phpController?.abs || phpRouteFile, ['app', 'src'])
       || '',
     frontend: firstExisting(ctx, cfg.frontend) || inferRootFromFile(ctx, component?.abs || routeFile, ['frontend/src', 'src']) || '',
     angularRoutes: routeFile,
     typeormEntities: entityDir,
     i18n: i18nDir,
-    frontendServices: serviceDir
+    frontendServices: serviceDir,
+    phpRoutes: phpRouteFile ? path.dirname(phpRouteFile) : '',
+    phpModels: phpModelDir
   };
 }
 
@@ -307,12 +323,23 @@ export function detectAdapters(ctx) {
   const hasDotnetProjectFile = ctx.allFiles.some((f) => /\.(csproj|sln|props|targets)$/i.test(f));
   const hasDotnetSdk = ctx.allFiles.some((f) => /\.csproj$/i.test(f) && /Microsoft\.NET\.Sdk/.test(read(f)));
   const hasAspNetMarkers = ctx.allFiles.some((f) => /\.cs$/i.test(f) && /(\[ApiController\]|ControllerBase|Map(Get|Post|Put|Patch|Delete))/m.test(read(f)));
+  const hasComposer = fs.existsSync(path.join(ctx.rootDir, 'composer.json'));
+  const phpFiles = ctx.allFiles.filter((f) => /\.php$/i.test(f));
+  const hasPhpFiles = phpFiles.length > 0;
+  const hasPhpFrameworkMarkers = hasComposer && /"(laravel\/framework|symfony\/framework-bundle|slim\/slim)"/.test(read(path.join(ctx.rootDir, 'composer.json')));
+  const hasPhpRoutes = ctx.allFiles.some((f) => /\.php$/i.test(f) && /\bRoute::(get|post|put|patch|delete|options|match|any|resource|apiResource)\s*\(/i.test(read(f)));
+  const hasPlainPhpAppShape = phpFiles.length >= 3 && (
+    phpFiles.some((f) => /(^|\/)index\.php$/i.test(f))
+    || phpFiles.some((f) => /(^|\/)lib\/[^/]+\.php$/i.test(f))
+    || phpFiles.some((f) => /(^|\/)(settings|reports|responses|segments|users|properties|sync)\/index\.php$/i.test(f))
+  );
   const hasSqlScripts = ctx.allFiles.some((f) => /\.sql$/i.test(f));
   return {
     nestjs: /@nestjs\//.test(pkgText) || ctx.allFiles.some((f) => f.endsWith('.controller.ts')) || contentNeedle(/@Controller\s*\(/),
     angular: /@angular\//.test(pkgText) || Boolean(ctx.roots.angularRoutes) || ctx.allFiles.some((f) => f.endsWith('.component.ts')),
     typeorm: /typeorm/.test(pkgText) || ctx.allFiles.some((f) => f.endsWith('.entity.ts')) || contentNeedle(/@Entity\s*\(/),
     dotnet: hasDotnetProjectFile || hasDotnetSdk || hasAspNetMarkers,
+    php: hasPhpFrameworkMarkers || hasPhpRoutes || hasPhpFiles && hasComposer || hasPlainPhpAppShape,
     sql: hasSqlScripts,
     resx: ctx.allFiles.some((f) => f.endsWith('.resx')),
     env: true,

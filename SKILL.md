@@ -1,6 +1,6 @@
 ---
 name: agent-repo-index
-description: Generate and use reusable `.agent-index` repository navigation maps for JavaScript/TypeScript, .NET, and SQL-heavy projects. Use when an AI coding agent needs to index a repo, refresh navigation files, reduce broad codebase exploration, inspect NestJS routes, Angular pages/components, TypeORM entities, ASP.NET routes/entities, SQL objects/scripts, API client/backend mappings, tests, large files, exports, i18n, or env/config references.
+description: Generate and use reusable `.agent-index` repository navigation maps for JavaScript/TypeScript, PHP, .NET, and SQL-heavy projects. Use when an AI coding agent needs to index a repo, refresh navigation files, reduce broad codebase exploration, inspect NestJS routes, Angular pages/components, TypeORM entities, Laravel-style PHP routes/models, ASP.NET routes/entities, SQL objects/scripts, API client/backend mappings, tests, large files, exports, i18n, or env/config references.
 compatibility: Requires Node.js 18+ and filesystem access to the repository being indexed. Uses only local file reads/writes and git metadata when available.
 ---
 
@@ -18,6 +18,8 @@ Optional behavior flags for agent-instruction integration:
 
 - `--update-agent-instructions`: append the recommended line to repo-root `AGENTS.md` and/or `CLAUDE.md` when present.
 - `--no-agent-instruction-offer`: disable interactive prompt.
+
+The default output folder is `.agent-index/`. Treat it as generated output and keep it in `.gitignore` by default unless the target repo intentionally wants to commit it.
 
 Then read `.agent-index/START_HERE.md` before broad repo searches. It routes task types to the smallest useful generated map.
 
@@ -38,6 +40,8 @@ Use `--config path/to/config.json` to select a specific config. Useful fields:
     "frontend": "frontend/src",
     "angularRoutes": "frontend/src/app/app.routes.ts",
     "typeormEntities": "backend/src/database/entities",
+    "phpRoutes": "routes",
+    "phpModels": "app/Models",
     "i18n": "frontend/src/assets/i18n",
     "frontendServices": "frontend/src/app/services"
   },
@@ -56,9 +60,9 @@ Use `--config path/to/config.json` to select a specific config. Useful fields:
 The script writes stable markdown files under `.agent-index/`:
 
 - `START_HERE.md`: task router and inventory counts.
-- `routes.md`: NestJS controller routes when detected.
+- `routes.md`: NestJS, Laravel-style PHP, and ASP.NET Core routes when detected.
 - `pages.md`: Angular route map when detected.
-- `schema.md`: TypeORM entity summary when detected.
+- `schema.md`: TypeORM entities, Eloquent-style PHP models, .NET entities, and SQL object summaries when detected.
 - `components.md`: Angular component index when detected.
 - `lib.md`: exported classes/functions/interfaces/types/enums/consts.
 - `feature-map.md`: inferred feature-to-first-read map plus configured hints.

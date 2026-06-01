@@ -60,7 +60,7 @@ export function generateComponentsMd(ctx, rows) {
   return lines.join('\n');
 }
 
-export function extractExports(content) {
+export function extractExports(content, filePath = '') {
   const patterns = [
     [/export\s+function\s+([A-Za-z0-9_]+)/g, 'fn'],
     [/export\s+class\s+([A-Za-z0-9_]+)/g, 'class'],
@@ -79,6 +79,15 @@ export function extractExports(content) {
     [/\b(?:create|alter)(?:\s+or\s+alter)?\s+table\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/gi, 'sql table'],
     [/\b(?:create|alter)(?:\s+or\s+alter)?\s+trigger\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/gi, 'sql trigger']
   ];
+  if (/\.php$/i.test(filePath)) {
+    patterns.push(
+      [/\bclass\s+([A-Za-z0-9_]+)/g, 'php class'],
+      [/\binterface\s+([A-Za-z0-9_]+)/g, 'php interface'],
+      [/\btrait\s+([A-Za-z0-9_]+)/g, 'php trait'],
+      [/\benum\s+([A-Za-z0-9_]+)/g, 'php enum'],
+      [/\bfunction\s+([A-Za-z0-9_]+)\s*\(/g, 'php function']
+    );
+  }
   const items = [];
   for (const [regex, label] of patterns) {
     let match;
@@ -88,10 +97,10 @@ export function extractExports(content) {
 }
 
 export function generateLibMd(ctx) {
-  const files = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs|sql)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
+  const files = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs|sql|php)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
   const lines = [heading(ctx, 'Library Exports'), ''];
   for (const file of files) {
-    const exports = extractExports(read(file));
+    const exports = extractExports(read(file), file);
     if (exports.length === 0) continue;
     lines.push(`## ${relFromRoot(ctx, file)}`);
     for (const item of exports.slice(0, 30)) lines.push(`- ${item}`);

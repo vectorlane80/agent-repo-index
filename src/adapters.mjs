@@ -83,6 +83,118 @@ export function extractDotnetMinimalApiRoutes(content) {
   return out;
 }
 
+export function extractPhpControllerAction(raw) {
+  const value = String(raw || '').replace(/\s+/g, ' ').trim();
+  const arrayMatch = value.match(/\[\s*([A-Za-z0-9_\\]+)::class\s*,\s*['"]([A-Za-z0-9_]+)['"]\s*\]/);
+  if (arrayMatch) return { controller: arrayMatch[1].split('\\').pop(), handler: arrayMatch[2] };
+  const stringMatch = value.match(/['"]([A-Za-z0-9_\\]+)@([A-Za-z0-9_]+)['"]/);
+  if (stringMatch) return { controller: stringMatch[1].split('\\').pop(), handler: stringMatch[2] };
+  const invokableMatch = value.match(/([A-Za-z0-9_\\]+)::class/);
+  if (invokableMatch) return { controller: invokableMatch[1].split('\\').pop(), handler: '__invoke' };
+  const closureMatch = value.match(/function\s*\(/);
+  if (closureMatch) return { controller: 'closure', handler: 'closure' };
+  return { controller: '-', handler: '-' };
+}
+
+export function extractPhpRouteArguments(content, startIndex) {
+  const open = content.indexOf('(', startIndex);
+  if (open === -1) return '';
+  let depth = 0;
+  let quote = '';
+  let escaped = false;
+  for (let i = open; i < content.length; i += 1) {
+    const ch = content[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(' || ch === '[') depth += 1;
+    if (ch === ')' || ch === ']') {
+      depth -= 1;
+      if (depth === 0) return content.slice(open + 1, i);
+    }
+  }
+  return '';
+}
+
+export function splitTopLevelArgs(args) {
+  const out = [];
+  let start = 0;
+  let depth = 0;
+  let quote = '';
+  let escaped = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const ch = args[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(' || ch === '[') depth += 1;
+    if (ch === ')' || ch === ']') depth -= 1;
+    if (ch === ',' && depth === 0) {
+      out.push(args.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  out.push(args.slice(start).trim());
+  return out.filter(Boolean);
+}
+
+export function extractPhpRoutes(content) {
+  const rows = [];
+  const methodMap = {
+    get: ['GET'],
+    post: ['POST'],
+    put: ['PUT'],
+    patch: ['PATCH'],
+    delete: ['DELETE'],
+    options: ['OPTIONS'],
+    any: ['ANY']
+  };
+  const routeRegex = /\bRoute::(get|post|put|patch|delete|options|any|match|resource|apiResource)\s*\(/ig;
+  let match;
+  while ((match = routeRegex.exec(content)) !== null) {
+    const kind = match[1];
+    const args = splitTopLevelArgs(extractPhpRouteArguments(content, match.index));
+    const firstQuoted = args[0]?.match(/['"]([^'"]*)['"]/);
+    const uri = firstQuoted?.[1] || '';
+    if (!uri) continue;
+
+    if (kind.toLowerCase() === 'match') {
+      const methods = [...(args[0] || '').matchAll(/['"]([A-Za-z]+)['"]/g)].map((m) => m[1].toUpperCase());
+      const routeUri = (args[1]?.match(/['"]([^'"]*)['"]/) || [null, ''])[1];
+      const action = extractPhpControllerAction(args.slice(2).join(', '));
+      for (const method of methods) rows.push({ method, methodPath: routeUri, ...action });
+      continue;
+    }
+
+    if (/^(apiResource|resource)$/i.test(kind)) {
+      const action = extractPhpControllerAction(args[1] || '');
+      const resourceMethods = kind === 'apiResource'
+        ? [['GET', uri, 'index'], ['POST', uri, 'store'], ['GET', `${uri}/{id}`, 'show'], ['PUT', `${uri}/{id}`, 'update'], ['PATCH', `${uri}/{id}`, 'update'], ['DELETE', `${uri}/{id}`, 'destroy']]
+        : [['GET', uri, 'index'], ['GET', `${uri}/create`, 'create'], ['POST', uri, 'store'], ['GET', `${uri}/{id}`, 'show'], ['GET', `${uri}/{id}/edit`, 'edit'], ['PUT', `${uri}/{id}`, 'update'], ['PATCH', `${uri}/{id}`, 'update'], ['DELETE', `${uri}/{id}`, 'destroy']];
+      for (const [method, methodPath, handler] of resourceMethods) rows.push({ method, methodPath, controller: action.controller, handler });
+      continue;
+    }
+
+    const action = extractPhpControllerAction(args.slice(1).join(', '));
+    for (const method of methodMap[kind.toLowerCase()] || [kind.toUpperCase()]) rows.push({ method, methodPath: uri, ...action });
+  }
+  return rows;
+}
+
 export function getRouteRows(ctx) {
   const rows = [];
 
@@ -146,6 +258,28 @@ export function getRouteRows(ctx) {
             file: rel
           });
         }
+      }
+    }
+  }
+
+  if (adapterEnabled(ctx, 'php') && ctx.detected.php) {
+    const files = ctx.allFiles.filter((f) => /\.php$/i.test(f)).filter((file) => {
+      const rel = relFromRoot(ctx, file);
+      return /(^|\/)routes\/[^/]+\.php$/.test(rel) || /\bRoute::/.test(read(file));
+    }).sort();
+
+    for (const file of files) {
+      const rel = relFromRoot(ctx, file);
+      for (const route of extractPhpRoutes(read(file))) {
+        const fullPath = normalizeRoute('', route.methodPath);
+        rows.push({
+          method: route.method,
+          path: fullPath,
+          comparablePath: normalizeComparableRoute(fullPath),
+          controller: route.controller,
+          handler: route.handler,
+          file: rel
+        });
       }
     }
   }
@@ -316,13 +450,14 @@ export function getSqlEntityRows(ctx) {
   if (!adapterEnabled(ctx, 'sql') || !ctx.detected.sql) return [];
   const files = ctx.allFiles.filter((file) => /\.sql$/i.test(file)).sort();
   const rows = [];
-  const regex = /\b(?:create|alter)(?:\s+or\s+alter)?\s+(procedure|proc|function|view|table|trigger)\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/ig;
+  const regex = /\b(?:create(?:\s+or\s+alter)?\s+(procedure|proc|function|view|table|trigger)|alter(?:\s+or\s+alter)?\s+(procedure|proc|function|view|trigger))\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/ig;
   for (const file of files) {
     const content = read(file);
     let match;
     while ((match = regex.exec(content)) !== null) {
-      const objectType = match[1].toLowerCase() === 'proc' ? 'procedure' : match[1].toLowerCase();
-      const objectName = match[2];
+      const rawType = match[1] || match[2] || '';
+      const objectType = rawType.toLowerCase() === 'proc' ? 'procedure' : rawType.toLowerCase();
+      const objectName = match[3];
       const line = content.slice(0, match.index).split(/\r?\n/).length;
       rows.push({
         className: objectName,
@@ -336,6 +471,68 @@ export function getSqlEntityRows(ctx) {
     }
   }
   return rows;
+}
+
+export function extractPhpArrayStrings(content, propertyName) {
+  const regex = new RegExp(`\\$${propertyName}\\s*=\\s*\\[([\\s\\S]*?)\\]\\s*;`, 'm');
+  const match = content.match(regex);
+  if (!match) return [];
+  return [...match[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);
+}
+
+export function extractPhpCasts(content) {
+  const regex = /\$casts\s*=\s*\[([\s\S]*?)\]\s*;/m;
+  const match = content.match(regex);
+  if (!match) return new Map();
+  const casts = new Map();
+  for (const item of match[1].matchAll(/['"]([^'"]+)['"]\s*=>\s*['"]([^'"]+)['"]/g)) casts.set(item[1], item[2]);
+  return casts;
+}
+
+export function extractPhpRelations(content) {
+  const out = [];
+  const regex = /function\s+([A-Za-z0-9_]+)\s*\([^)]*\)\s*(?::\s*[A-Za-z0-9_\\|?]+)?\s*\{([\s\S]{0,900}?)\n\s*\}/g;
+  const relationMethods = ['hasOne', 'hasMany', 'belongsTo', 'belongsToMany', 'morphOne', 'morphMany', 'morphTo', 'morphToMany'];
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const body = match[2];
+    const rel = relationMethods.find((method) => new RegExp(`\\$this->${method}\\s*\\(`).test(body));
+    if (rel) out.push({ name: match[1], type: rel, kind: 'relation', notes: '-' });
+  }
+  return out;
+}
+
+export function getPhpEntityRows(ctx) {
+  if (!adapterEnabled(ctx, 'php') || !ctx.detected.php) return [];
+  const files = ctx.allFiles.filter((file) => /\.php$/i.test(file)).filter((file) => {
+    const rel = relFromRoot(ctx, file);
+    if (isTestFile(rel) || /(^|\/)(Http|Controllers|Middleware|Requests|Resources)\//.test(rel)) return false;
+    const content = read(file);
+    return /extends\s+Model\b|use\s+Illuminate\\Database\\Eloquent\\Model\b/.test(content) || /(^|\/)app\/Models\/[^/]+\.php$/.test(rel);
+  }).sort();
+
+  return files.map((file) => {
+    const content = read(file);
+    const className = (content.match(/\bclass\s+([A-Za-z0-9_]+)/) || [null, path.basename(file, '.php')])[1];
+    const tableName = (content.match(/\$table\s*=\s*['"]([^'"]+)['"]/) || [null, className])[1];
+    const pk = (content.match(/\$primaryKey\s*=\s*['"]([^'"]+)['"]/) || [null, 'id'])[1];
+    const hidden = new Set(extractPhpArrayStrings(content, 'hidden'));
+    const casts = extractPhpCasts(content);
+    const fillable = extractPhpArrayStrings(content, 'fillable');
+    const cols = fillable.map((name) => ({ name, type: casts.get(name) || 'fillable', kind: 'column', notes: hidden.has(name) ? 'hidden' : '-' }));
+    for (const [name, type] of casts) {
+      if (!fillable.includes(name)) cols.push({ name, type, kind: 'column', notes: 'cast' });
+    }
+    return {
+      className,
+      fallback: className,
+      tableName,
+      pks: pk ? [pk] : [],
+      cols,
+      rels: extractPhpRelations(content),
+      file: relFromRoot(ctx, file)
+    };
+  });
 }
 
 export function getEntityRows(ctx) {
@@ -356,6 +553,7 @@ export function getEntityRows(ctx) {
       });
     }
   }
+  rows.push(...getPhpEntityRows(ctx));
   rows.push(...getDotnetEntityRows(ctx));
   rows.push(...getSqlEntityRows(ctx));
   return rows;
@@ -389,6 +587,7 @@ export function featureNameFromRel(rel) {
   }
   const srcIndex = parts.indexOf('src');
   if (srcIndex >= 0 && parts[srcIndex + 1]) return parts[srcIndex + 1];
+  if (parts.length === 1) return parts[0].replace(/\.[^.]+$/, '') || 'root';
   return parts[0] || 'root';
 }
 
@@ -413,7 +612,7 @@ export function getFeatureRows(ctx, routeRows, entityRows, componentRows) {
       ensure(featureNameFromRel(rel)).tests.add(rel);
       continue;
     }
-    if (/\.(controller|service|module)\.[jt]s$/.test(rel) || /Controller\.cs$/.test(rel) || /(^|\/)Program\.cs$/.test(rel) || /\.sql$/i.test(rel)) ensure(featureNameFromRel(rel)).backendFiles.add(rel);
+    if (/\.(controller|service|module)\.[jt]s$/.test(rel) || /Controller\.cs$/.test(rel) || /(^|\/)Program\.cs$/.test(rel) || /\.sql$/i.test(rel) || /(^|\/)routes\/[^/]+\.php$/.test(rel) || /Controller\.php$/.test(rel) || /\.php$/i.test(rel) && !/(^|\/)deploy\//.test(rel)) ensure(featureNameFromRel(rel)).backendFiles.add(rel);
     if (/\/(pages|components|routes|app)\//.test(rel) || rel.endsWith('.component.ts')) ensure(featureNameFromRel(rel)).frontendPaths.add(rel);
   }
 
@@ -543,7 +742,7 @@ export function getApiClientRows(ctx, routeRows) {
 }
 
 export function getTestRows(ctx) {
-  const sourceFiles = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
+  const sourceFiles = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs|php)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
   const testFiles = new Set(ctx.allFiles.filter((f) => isTestFile(relFromRoot(ctx, f))).map((f) => relFromRoot(ctx, f)));
   const testList = [...testFiles];
   return sourceFiles.map((file) => {
@@ -559,12 +758,20 @@ export function getTestRows(ctx) {
       `${base}Tests.cs`,
       `${base}Test.cs`,
       `${base}Specs.cs`,
-      `${dir}/${path.basename(base)}Tests.cs`
+      `${dir}/${path.basename(base)}Tests.cs`,
+      `${base}Test.php`,
+      `${base}Spec.php`,
+      `${dir}/${path.basename(base)}Test.php`,
+      `${dir}/__tests__/${path.basename(base)}Test.php`
     ];
     let direct = directCandidates.find((candidate) => testFiles.has(candidate)) || '';
     if (!direct && ext === '.cs') {
       const baseName = path.basename(base);
       direct = testList.find((candidate) => /(^|\/)(tests?|test-projects)\//i.test(candidate) && new RegExp(`${baseName}(Test|Tests|Spec|Specs)\\.cs$`, 'i').test(path.basename(candidate))) || '';
+    }
+    if (!direct && ext === '.php') {
+      const baseName = path.basename(base);
+      direct = testList.find((candidate) => /(^|\/)(tests?|specs?)\//i.test(candidate) && new RegExp(`${baseName}(Test|Spec)\\.php$`, 'i').test(path.basename(candidate))) || '';
     }
     const nearby = testList.filter((spec) => spec.startsWith(`${dir}/`) && spec !== direct).slice(0, 5);
     return { source: rel, lines: lineCount(file), directSpec: direct, nearbySpecs: nearby };
@@ -581,6 +788,9 @@ export function extractLandmarks(file) {
     [/^\s{2,}(?:readonly\s+)?([A-Za-z0-9_]+)\s*=\s*(?:computed|signal|new\s+BehaviorSubject)/, 'state'],
     [/public\s+class\s+([A-Za-z0-9_]+)/, 'class'],
     [/public\s+(?:async\s+)?(?:[A-Za-z0-9_<>,?.\[\]]+\s+)+([A-Za-z0-9_]+)\s*\(/, 'method'],
+    [/\bclass\s+([A-Za-z0-9_]+)/, 'class'],
+    [/\bfunction\s+([A-Za-z0-9_]+)\s*\(/, 'fn'],
+    [/\bRoute::(get|post|put|patch|delete|options|match|any|resource|apiResource)\s*\(/i, 'route'],
     [/\b(?:create|alter)(?:\s+or\s+alter)?\s+(?:procedure|proc|function|view|table|trigger)\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/i, 'sql']
   ];
   for (let i = 0; i < lines.length; i += 1) {
@@ -599,7 +809,7 @@ export function extractLandmarks(file) {
 export function getLargeFileRows(ctx) {
   const threshold = Number(ctx.config.largeFileThreshold || 300);
   return ctx.allFiles
-    .filter((f) => /\.(ts|tsx|js|jsx|html|scss|css|json|resx|yml|yaml|cs|csproj|sql|sqlproj)$/.test(f))
+    .filter((f) => /\.(ts|tsx|js|jsx|html|scss|css|json|resx|yml|yaml|cs|csproj|sql|sqlproj|php)$/.test(f))
     .map((file) => ({ file, rel: relFromRoot(ctx, file), lines: lineCount(file), landmarks: extractLandmarks(file) }))
     .filter((row) => row.lines >= threshold)
     .sort((a, b) => b.lines - a.lines || a.rel.localeCompare(b.rel));
@@ -655,6 +865,9 @@ export function getEnvRows(ctx) {
     /ConfigService[^\n]+get(?:OrThrow)?\(['"]([A-Z0-9_]+)['"]\)/g,
     /Configuration\[['"]([A-Z0-9_:]+)['"]\]/g,
     /GetValue<[^>]+>\(['"]([A-Z0-9_:]+)['"]\)/g,
+    /\benv\(\s*['"]([A-Z0-9_]+)['"]/g,
+    /\$_ENV\[['"]([A-Z0-9_]+)['"]\]/g,
+    /\$_SERVER\[['"]([A-Z0-9_]+)['"]\]/g,
     /\$\(([A-Z0-9_]+)\)/g,
     /\$\{([A-Z0-9_]+)\}/g
   ];

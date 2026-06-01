@@ -2,7 +2,7 @@
 
 Agent Repo Index is an Agent Skills-compatible repository indexing skill for AI coding agents. It generates stable markdown maps that help an agent understand a codebase before doing broad search or opening large numbers of files.
 
-The current implementation is optimized for JavaScript/TypeScript, .NET, and SQL-heavy application repos, especially NestJS, Angular, TypeORM, ASP.NET Core APIs, database script repositories, localization-heavy projects, env/config-heavy projects, and testable monorepos.
+The current implementation is optimized for JavaScript/TypeScript, PHP, .NET, and SQL-heavy application repos, especially NestJS, Angular, TypeORM, Laravel-style PHP apps, ASP.NET Core APIs, database script repositories, localization-heavy projects, env/config-heavy projects, and testable monorepos.
 
 ## Quick Start
 
@@ -23,6 +23,8 @@ Then read:
 ## Agent Integration
 
 After index generation, the CLI always prints the recommended agent-instruction line.
+
+The output directory is `.agent-index/` by default, and this repository treats that folder as generated output that should stay in `.gitignore` unless a specific repo chooses to commit it.
 
 If `AGENTS.md` or `CLAUDE.md` exists at repo root and the terminal is interactive, the CLI also offers to append that line for you.
 
@@ -46,9 +48,9 @@ This keeps behavior explicit and portable across agent ecosystems.
 The generator writes deterministic markdown files under `.agent-index/` by default:
 
 - `START_HERE.md`: task router and index inventory.
-- `routes.md`: NestJS controller routes when detected.
+- `routes.md`: NestJS, Laravel-style PHP, and ASP.NET Core routes when detected.
 - `pages.md`: Angular route map when detected.
-- `schema.md`: TypeORM entities, .NET entities, and SQL object summaries when detected.
+- `schema.md`: TypeORM entities, Eloquent-style PHP models, .NET entities, and SQL object summaries when detected.
 - `components.md`: Angular component index when detected.
 - `lib.md`: exported classes, functions, interfaces, types, enums, and constants.
 - `feature-map.md`: inferred feature-to-first-read map plus configured hints.
@@ -78,6 +80,8 @@ Use `--config path/to/config.json` to select a specific config file.
     "frontend": "frontend/src",
     "angularRoutes": "frontend/src/app/app.routes.ts",
     "typeormEntities": "backend/src/database/entities",
+    "phpRoutes": "routes",
+    "phpModels": "app/Models",
     "i18n": "frontend/src/assets/i18n",
     "frontendServices": "frontend/src/app/services"
   },
@@ -97,6 +101,7 @@ Supported adapter IDs:
 - `angular`
 - `typeorm`
 - `dotnet`
+- `php`
 - `sql`
 - `resx`
 - `env`
@@ -105,7 +110,7 @@ Supported adapter IDs:
 - `exports`
 - `api-client`
 
-`apiClient`, `largeFiles`, `csharp`, and `aspnet` are accepted as compatibility aliases.
+`apiClient`, `largeFiles`, `csharp`, `aspnet`, `laravel`, and `symfony` are accepted as compatibility aliases.
 
 ## Validation
 
@@ -138,7 +143,7 @@ Run an index completeness audit (count match + digest match + deterministic reru
 npm run check:index-completeness
 ```
 
-The smoke test covers adapter alias normalization, explicit missing-config failures, service-root discovery, and env/config supplemental scanning.
+The smoke test covers adapter alias normalization, explicit missing-config failures, service-root discovery, PHP route/model/test discovery, and env/config supplemental scanning.
 
 GitHub Actions runs `npm run validate` on pushes to `main` and on pull requests.
 
