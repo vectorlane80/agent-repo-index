@@ -1,6 +1,6 @@
 ---
 name: agent-repo-index
-description: Generate and use reusable `.agent-index` repository navigation maps for JavaScript/TypeScript, PHP, .NET, and SQL-heavy projects. Use when an AI coding agent needs to index a repo, refresh navigation files, reduce broad codebase exploration, inspect NestJS routes, Angular pages/components, TypeORM entities, Laravel-style PHP routes/models, ASP.NET routes/entities, SQL objects/scripts, API client/backend mappings, tests, large files, exports, i18n, or env/config references.
+description: Generate and use reusable `.agent-index` repository navigation maps for JavaScript/TypeScript, PHP, .NET, Python, Rust, Swift, GDScript (Godot), Astro, React/Next.js, and SQL projects. Use when an AI coding agent needs to index a repo, refresh navigation files, reduce broad codebase exploration, inspect NestJS routes, Angular pages/components, TypeORM entities, Laravel-style PHP routes/models, ASP.NET routes/entities, SQL objects/scripts, API client/backend mappings, tests, large files, exports, i18n, or env/config references.
 compatibility: Requires Node.js 18+ and filesystem access to the repository being indexed. Uses only local file reads/writes and git metadata when available.
 ---
 
@@ -43,7 +43,12 @@ Use `--config path/to/config.json` to select a specific config. Useful fields:
     "phpRoutes": "routes",
     "phpModels": "app/Models",
     "i18n": "frontend/src/assets/i18n",
-    "frontendServices": "frontend/src/app/services"
+    "frontendServices": "frontend/src/app/services",
+    "pythonBackend": "backend/src",
+    "swiftSources": "Sources",
+    "rustCrates": "crates",
+    "astroPages": "src/pages",
+    "reactApp": "app"
   },
   "featureHints": {
     "messaging": {
@@ -65,6 +70,7 @@ The script writes stable markdown files under `.agent-index/`:
 - `schema.md`: TypeORM entities, Eloquent-style PHP models, .NET entities, and SQL object summaries when detected.
 - `components.md`: Angular component index when detected.
 - `lib.md`: exported classes/functions/interfaces/types/enums/consts.
+- `language-map.md`: Python modules, Rust crates, Swift targets, Godot scenes/scripts, Astro pages, and Shell scripts when detected.
 - `feature-map.md`: inferred feature-to-first-read map plus configured hints.
 - `api-client-map.md`: frontend HTTP calls mapped to backend routes where possible.
 - `test-map.md`: source files mapped to direct or nearby tests.
@@ -100,4 +106,4 @@ Run the built-in smoke test after changes:
 node scripts/self-test.mjs
 ```
 
-It checks adapter alias normalization, missing config failures, service-root discovery, and env/config supplemental scanning.
+It checks adapter alias normalization (including Python/Rust/Swift/Godot/Astro/React/Shell aliases), missing config failures, service-root discovery, env/config supplemental scanning, and detection/rendering of the Python, Rust, Swift, Godot, Astro, React, and Shell adapters.

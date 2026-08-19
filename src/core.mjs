@@ -44,10 +44,20 @@ export const SOURCE_EXTENSIONS = new Set([
   '.cshtml',
   '.sql',
   '.sqlproj',
-  '.php'
+  '.php',
+  '.py',
+  '.rs',
+  '.swift',
+  '.gd',
+  '.tscn',
+  '.astro',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.toml'
 ]);
 export const HTTP_METHODS = { Get: 'GET', Post: 'POST', Put: 'PUT', Patch: 'PATCH', Delete: 'DELETE', Options: 'OPTIONS', Head: 'HEAD', Sse: 'SSE' };
-export const ADAPTER_IDS = ['nestjs', 'angular', 'typeorm', 'dotnet', 'php', 'sql', 'resx', 'env', 'tests', 'large-files', 'exports', 'api-client'];
+export const ADAPTER_IDS = ['nestjs', 'angular', 'typeorm', 'dotnet', 'php', 'sql', 'resx', 'env', 'tests', 'large-files', 'exports', 'api-client', 'python', 'rust', 'swift', 'godot', 'astro', 'react', 'shell'];
 
 export function normalizeAdapterId(value) {
   const raw = String(value || '').trim();
@@ -65,7 +75,19 @@ export function normalizeAdapterId(value) {
     laravel: 'php',
     symfony: 'php',
     mssql: 'sql',
-    database: 'sql'
+    database: 'sql',
+    py: 'python',
+    python3: 'python',
+    rs: 'rust',
+    rustlang: 'rust',
+    gdscript: 'godot',
+    swiftpm: 'swift',
+    nextjs: 'react',
+    next: 'react',
+    sh: 'shell',
+    bash: 'shell',
+    zsh: 'shell',
+    shellscript: 'shell'
   };
   return aliases[raw] || raw;
 }
@@ -232,7 +254,12 @@ export function isTestFile(rel) {
     || /(^|\/)(tests?|test-projects)\//i.test(rel)
     || /(Tests?|Specs?)\.cs$/i.test(rel)
     || /(^|\/)(tests?|specs?)\//i.test(rel) && /\.php$/i.test(rel)
-    || /(Test|Spec)\.php$/i.test(rel);
+    || /(Test|Spec)\.php$/i.test(rel)
+    || /\btest_[A-Za-z0-9_]+\.py$/.test(rel)
+    || /[A-Za-z0-9_]+_test\.py$/.test(rel)
+    || /(^|\/)(Tests|UITests)\/[^/]+\.swift$/.test(rel)
+    || /[A-Za-z0-9_]+Tests\.swift$/.test(rel)
+    || /(^|\/)test_[^/]+\.gd$/.test(rel);
 }
 
 export function relFromRoot(ctx, filePath) {
@@ -284,7 +311,14 @@ export function discoverRoots(ctx) {
     i18n: i18nDir,
     frontendServices: serviceDir,
     phpRoutes: phpRouteFile ? path.dirname(phpRouteFile) : '',
-    phpModels: phpModelDir
+    phpModels: phpModelDir,
+    pythonBackend: firstExisting(ctx, cfg.pythonBackend)
+      || (fs.existsSync(absFromRel(ctx, 'src')) && fs.statSync(absFromRel(ctx, 'src')).isDirectory() && ctx.allFiles.some((f) => isInside(f, absFromRel(ctx, 'src')) && /\.py$/.test(f)) ? absFromRel(ctx, 'src') : '')
+      || (fs.existsSync(absFromRel(ctx, 'app')) && fs.statSync(absFromRel(ctx, 'app')).isDirectory() && ctx.allFiles.some((f) => isInside(f, absFromRel(ctx, 'app')) && /\.py$/.test(f)) ? absFromRel(ctx, 'app') : ''),
+    swiftSources: firstExisting(ctx, cfg.swiftSources) || (fs.existsSync(path.join(ctx.rootDir, 'Sources')) ? path.join(ctx.rootDir, 'Sources') : ''),
+    rustCrates: firstExisting(ctx, cfg.rustCrates) || (fs.existsSync(path.join(ctx.rootDir, 'crates')) ? path.join(ctx.rootDir, 'crates') : ''),
+    astroPages: firstExisting(ctx, cfg.astroPages) || (fs.existsSync(path.join(ctx.rootDir, 'src/pages')) ? path.join(ctx.rootDir, 'src/pages') : ''),
+    reactApp: firstExisting(ctx, cfg.reactApp) || (fs.existsSync(path.join(ctx.rootDir, 'app')) ? path.join(ctx.rootDir, 'app') : '')
   };
 }
 
@@ -346,7 +380,14 @@ export function detectAdapters(ctx) {
     tests: true,
     'large-files': true,
     exports: true,
-    'api-client': true
+    'api-client': true,
+    python: fs.existsSync(path.join(ctx.rootDir, 'pyproject.toml')) || fs.existsSync(path.join(ctx.rootDir, 'requirements.txt')) || fs.existsSync(path.join(ctx.rootDir, 'setup.py')) || ctx.allFiles.some((f) => /\.py$/.test(f)),
+    rust: fs.existsSync(path.join(ctx.rootDir, 'Cargo.toml')) || ctx.allFiles.some((f) => /\.rs$/.test(f)),
+    swift: fs.existsSync(path.join(ctx.rootDir, 'Package.swift')) || ctx.allFiles.some((f) => /\.swift$/.test(f)),
+    godot: fs.existsSync(path.join(ctx.rootDir, 'project.godot')) || ctx.allFiles.some((f) => /\.gd$/.test(f)),
+    astro: ['astro.config.mjs', 'astro.config.mts', 'astro.config.js', 'astro.config.ts'].some((n) => fs.existsSync(path.join(ctx.rootDir, n))) || ctx.allFiles.some((f) => /\.astro$/.test(f)),
+    react: /"react"\s*:/.test(pkgText) || /"react-dom"\s*:/.test(pkgText) || /"next"\s*:/.test(pkgText) || /"next\//.test(pkgText) || ['next.config.js', 'next.config.ts', 'next.config.mjs'].some((n) => fs.existsSync(path.join(ctx.rootDir, n))) || ctx.allFiles.some((f) => /\.(tsx|jsx)$/.test(f)),
+    shell: ctx.allFiles.some((f) => /\.(sh|bash|zsh)$/.test(f))
   };
 }
 

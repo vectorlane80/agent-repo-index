@@ -2,7 +2,7 @@
 
 Agent Repo Index is an Agent Skills-compatible repository indexing skill for AI coding agents. It generates stable markdown maps that help an agent understand a codebase before doing broad search or opening large numbers of files.
 
-The current implementation is optimized for JavaScript/TypeScript, PHP, .NET, and SQL-heavy application repos, especially NestJS, Angular, TypeORM, Laravel-style PHP apps, ASP.NET Core APIs, database script repositories, localization-heavy projects, env/config-heavy projects, and testable monorepos.
+The current implementation is optimized for JavaScript/TypeScript, PHP, .NET, Python, Rust, Swift, GDScript (Godot), Astro, React/Next.js, and SQL-heavy application repos, especially NestJS, Angular, TypeORM, Laravel-style PHP apps, ASP.NET Core APIs, database script repositories, localization-heavy projects, env/config-heavy projects, and testable monorepos.
 
 ## Quick Start
 
@@ -53,6 +53,7 @@ The generator writes deterministic markdown files under `.agent-index/` by defau
 - `schema.md`: TypeORM entities, Eloquent-style PHP models, .NET entities, and SQL object summaries when detected.
 - `components.md`: Angular component index when detected.
 - `lib.md`: exported classes, functions, interfaces, types, enums, and constants.
+- `language-map.md`: Python modules, Rust crates, Swift targets, Godot scenes/scripts, Astro pages, and Shell scripts when detected.
 - `feature-map.md`: inferred feature-to-first-read map plus configured hints.
 - `api-client-map.md`: frontend HTTP calls mapped to backend routes where possible.
 - `test-map.md`: source files mapped to direct or nearby tests.
@@ -83,7 +84,12 @@ Use `--config path/to/config.json` to select a specific config file.
     "phpRoutes": "routes",
     "phpModels": "app/Models",
     "i18n": "frontend/src/assets/i18n",
-    "frontendServices": "frontend/src/app/services"
+    "frontendServices": "frontend/src/app/services",
+    "pythonBackend": "backend/src",
+    "swiftSources": "Sources",
+    "rustCrates": "crates",
+    "astroPages": "src/pages",
+    "reactApp": "app"
   },
   "featureHints": {
     "messaging": {
@@ -109,8 +115,15 @@ Supported adapter IDs:
 - `large-files`
 - `exports`
 - `api-client`
+- `python`
+- `rust`
+- `swift`
+- `godot`
+- `astro`
+- `react`
+- `shell`
 
-`apiClient`, `largeFiles`, `csharp`, `aspnet`, `laravel`, and `symfony` are accepted as compatibility aliases.
+`apiClient`, `largeFiles`, `csharp`, `aspnet`, `laravel`, `symfony`, `py`, `python3`, `rs`, `rustlang`, `gdscript`, `swiftpm`, `nextjs`, `next`, `sh`, `bash`, `zsh`, and `shellscript` are accepted as compatibility aliases.
 
 ## Validation
 
@@ -143,7 +156,7 @@ Run an index completeness audit (count match + digest match + deterministic reru
 npm run check:index-completeness
 ```
 
-The smoke test covers adapter alias normalization, explicit missing-config failures, service-root discovery, PHP route/model/test discovery, and env/config supplemental scanning.
+The smoke test covers adapter alias normalization (including Python/Rust/Swift/Godot/Astro/React/Shell aliases), explicit missing-config failures, service-root discovery, PHP route/model/test discovery, env/config supplemental scanning, and detection/rendering of the Python, Rust, Swift, Godot, Astro, React, and Shell adapters.
 
 GitHub Actions runs `npm run validate` on pushes to `main` and on pull requests.
 

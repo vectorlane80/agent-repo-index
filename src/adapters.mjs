@@ -354,6 +354,247 @@ export function getPageRows(ctx) {
   return rows.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+export function extractPythonRoutes(content) {
+  const rows = [];
+  const push = (method, rawPath, index) => {
+    const clean = rawPath.replace(/\{([A-Za-z0-9_]+)\}/g, ':$1').replace(/\/+/g, '/').replace(/\/$/, '');
+    rows.push({ method, path: clean.startsWith('/') ? clean : `/${clean}`, index });
+  };
+  const fastapiRegex = /@(?:app|router)\.(get|post|put|patch|delete|options|head)\s*\(\s*['"]([^'"]+)['"]/g;
+  let match;
+  while ((match = fastapiRegex.exec(content)) !== null) push(match[1].toUpperCase(), match[2], match.index);
+  const flaskRegex = /@(?:app|blueprint)\.route\(\s*['"]([^'"]+)['"]\s*(?:,\s*methods\s*=\s*\[?['"]([A-Z]+)['"]\]?)?/g;
+  while ((match = flaskRegex.exec(content)) !== null) push(match[2] ? match[2].toUpperCase() : 'GET', match[1], match.index);
+  const djangoRegex = /path\(\s*['"]([^'"]+)['"]\s*,\s*([A-Za-z0-9_\.]+)/g;
+  while ((match = djangoRegex.exec(content)) !== null) push('GET', match[1], match.index);
+  return rows;
+}
+
+export function getPythonRouteRows(ctx) {
+  if (!adapterEnabled(ctx, 'python') || !ctx.detected.python) return [];
+  const rows = [];
+  const files = ctx.allFiles.filter((f) => /\.py$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
+  for (const file of files) {
+    const content = read(file);
+    const rel = relFromRoot(ctx, file);
+    for (const route of extractPythonRoutes(content)) {
+      const handlerMatch = content.slice(route.index, route.index + 800).match(/\bdef\s+(\w+)\s*\(/);
+      rows.push({
+        method: route.method,
+        path: route.path,
+        comparablePath: normalizeComparableRoute(route.path),
+        controller: rel,
+        handler: handlerMatch ? handlerMatch[1] : '-',
+        file: rel
+      });
+    }
+  }
+  return rows.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
+}
+
+export function getPythonModuleRows(ctx) {
+  if (!adapterEnabled(ctx, 'python') || !ctx.detected.python) return [];
+  const files = ctx.allFiles.filter((f) => /\.py$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
+  return files.map((file) => {
+    const content = read(file);
+    const rel = relFromRoot(ctx, file);
+    const entrypoint = /if\s+__name__\s*==\s*['"]__main__['"]\s*:/.test(content)
+      || /\bdef\s+main\s*\(/.test(content)
+      || /(^|\/)(manage|app|main|server|cli|__main__)\.py$/.test(rel);
+    const symbols = [...content.matchAll(/^(?:class|def)\s+([A-Za-z0-9_]+)/gm)].length;
+    return { file: rel, kind: entrypoint ? 'entrypoint' : 'module', lines: lineCount(file), symbols };
+  });
+}
+
+export function getRustCrateRows(ctx) {
+  if (!adapterEnabled(ctx, 'rust') || !ctx.detected.rust) return [];
+  const rows = [];
+  const crateKind = (rel) => {
+    const dir = rel === '.' ? ctx.rootDir : path.join(ctx.rootDir, rel);
+    const cargo = path.join(dir, 'Cargo.toml');
+    if (fs.existsSync(cargo) && /\[\[bin\]\]/.test(read(cargo))) return 'bin';
+    if (fs.existsSync(path.join(dir, 'src', 'main.rs'))) return 'bin';
+    if (fs.existsSync(path.join(dir, 'src', 'lib.rs'))) return 'lib';
+    return 'crate';
+  };
+  const rootCargo = path.join(ctx.rootDir, 'Cargo.toml');
+  if (fs.existsSync(rootCargo)) {
+    const content = read(rootCargo);
+    const workspace = content.match(/\[workspace\]([\s\S]*?)(?=\n\[|\s*$)/);
+    if (workspace) {
+      const membersMatch = workspace[1].match(/members\s*=\s*\[([\s\S]*?)\]/);
+      if (membersMatch) {
+        for (const member of membersMatch[1].matchAll(/['"]([^'"]+)['"]/g)) {
+          const rel = member[1];
+          rows.push({ crate: rel.split('/').filter(Boolean).pop() || rel, path: rel, kind: crateKind(rel) });
+        }
+      }
+    }
+    const packageMatch = content.match(/\[package\][\s\S]*?name\s*=\s*"([^"]+)"/);
+    if (packageMatch) rows.push({ crate: packageMatch[1], path: '.', kind: crateKind('.') });
+  }
+  if (rows.length === 0) {
+    const cratesDir = path.join(ctx.rootDir, 'crates');
+    if (fs.existsSync(cratesDir)) {
+      for (const entry of fs.readdirSync(cratesDir, { withFileTypes: true })) {
+        if (entry.isDirectory() && fs.existsSync(path.join(cratesDir, entry.name, 'Cargo.toml'))) {
+          const rel = `crates/${entry.name}`;
+          rows.push({ crate: entry.name, path: rel, kind: crateKind(rel) });
+        }
+      }
+    }
+  }
+  return rows.sort((a, b) => a.crate.localeCompare(b.crate));
+}
+
+export function getSwiftTargetRows(ctx) {
+  if (!adapterEnabled(ctx, 'swift') || !ctx.detected.swift) return [];
+  const rows = [];
+  const sourcesDir = path.join(ctx.rootDir, 'Sources');
+  const packageFile = path.join(ctx.rootDir, 'Package.swift');
+  if (fs.existsSync(packageFile)) {
+    const targetRegex = /\.(?:executableTarget|target)\(\s*name:\s*"([^"]+)"/g;
+    let match;
+    while ((match = targetRegex.exec(read(packageFile))) !== null) {
+      rows.push({ target: match[1], path: fs.existsSync(path.join(sourcesDir, match[1])) ? `Sources/${match[1]}` : '' });
+    }
+  }
+  if (rows.length === 0 && fs.existsSync(sourcesDir)) {
+    for (const entry of fs.readdirSync(sourcesDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) rows.push({ target: entry.name, path: `Sources/${entry.name}` });
+    }
+  }
+  return rows.sort((a, b) => a.target.localeCompare(b.target));
+}
+
+export function getGodotRows(ctx) {
+  if (!adapterEnabled(ctx, 'godot') || !ctx.detected.godot) return [];
+  const rows = [];
+  const projectFile = path.join(ctx.rootDir, 'project.godot');
+  if (fs.existsSync(projectFile)) {
+    let inAutoload = false;
+    for (const line of read(projectFile).split(/\r?\n/)) {
+      if (/^\[[^\]]+\]/.test(line.trim())) {
+        inAutoload = line.trim() === '[autoload]';
+        continue;
+      }
+      if (!inAutoload) continue;
+      const match = line.match(/^([A-Za-z_]\w*)\s*=\s*"\*?(res:\/\/[^"]+)"/);
+      if (match) rows.push({ kind: 'autoload', name: match[1], path: match[2] });
+    }
+  }
+  const scripts = ctx.allFiles.filter((f) => /\.gd$/.test(f))
+    .map((file) => ({ kind: 'script', name: path.basename(file), path: relFromRoot(ctx, file) }))
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .slice(0, 200);
+  const scenes = ctx.allFiles.filter((f) => /\.tscn$/.test(f))
+    .map((file) => ({ kind: 'scene', name: path.basename(file), path: relFromRoot(ctx, file) }))
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .slice(0, 200);
+  rows.push(...scripts, ...scenes);
+  return rows;
+}
+
+
+function mapRouteSegment(seg) {
+  const optional = seg.match(/^\[\[\.\.\.([^\]]+)\]\]$/);
+  if (optional) return `:${optional[1]}*`;
+  const catchAll = seg.match(/^\[\.\.\.([^\]]+)\]$/);
+  if (catchAll) return `*${catchAll[1]}`;
+  return seg.replace(/^\[(.*)\]$/, ':$1');
+}
+
+export function getAstroPageRows(ctx) {
+  if (!adapterEnabled(ctx, 'astro') || !ctx.detected.astro || !ctx.roots.astroPages) return [];
+  const root = ctx.roots.astroPages;
+  const files = ctx.allFiles.filter((f) => /\.astro$/.test(f) && isInside(f, root)).sort();
+  const rows = [];
+  for (const file of files) {
+    const rel = relFromRoot(ctx, file);
+    const segments = path.relative(root, file).replace(/\\/g, '/').split('/').filter(Boolean);
+    if (segments.some((seg) => seg.startsWith('_'))) continue;
+    const last = segments[segments.length - 1].replace(/\.astro$/, '');
+    const routeSegs = [...segments.slice(0, -1), ...(last === 'index' ? [] : [last])].map((seg) => mapRouteSegment(seg));
+    const route = `/${routeSegs.join('/')}`.replace(/\/+/g, '/') || '/';
+    const isApi = segments.slice(0, -1).includes('api');
+    rows.push({
+      path: route,
+      comparablePath: normalizeComparableRoute(route),
+      target: isApi ? '[api]' : last,
+      guards: '-',
+      file: rel
+    });
+  }
+  return rows.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export function getReactPageRows(ctx) {
+  if (!adapterEnabled(ctx, 'react') || !ctx.detected.react) return [];
+  const rows = [];
+  const seen = new Set();
+  const add = (row) => {
+    const key = row.comparablePath || row.path;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push(row);
+  };
+  const appRoot = ctx.roots.reactApp || '';
+  if (appRoot) {
+    const files = ctx.allFiles.filter((f) => /\.(tsx|jsx|js|mjs)$/.test(f) && isInside(f, appRoot) && /page\.(tsx|jsx|js|mjs)$/.test(path.basename(f))).sort();
+    for (const file of files) {
+      const segments = path.relative(appRoot, file).replace(/\\/g, '/').split('/').filter(Boolean)
+        .filter((seg) => !seg.startsWith('(') && !seg.startsWith('@'))
+        .map((seg) => mapRouteSegment(seg.replace(/\.(tsx|jsx|js|mjs)$/, '')))
+        .filter((seg) => seg !== 'page');
+      const route = `/${segments.join('/')}`.replace(/\/+/g, '/') || '/';
+      add({ path: route, comparablePath: normalizeComparableRoute(route), target: 'page', guards: '-', file: relFromRoot(ctx, file) });
+    }
+  }
+  for (const file of ctx.allFiles.filter((f) => /\.(tsx|jsx|js|mjs)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort()) {
+    const content = read(file);
+    const routeRegex = /<Route\b/g;
+    let match;
+    while ((match = routeRegex.exec(content)) !== null) {
+      const window = content.slice(match.index, match.index + 600);
+      const pathMatch = window.match(/\bpath\s*=\s*['"]([^'"]+)['"]/);
+      if (!pathMatch) continue;
+      const elementMatch = window.match(/\belement\s*=\s*\{?\s*<([A-Za-z0-9_]+)/);
+      add({
+        path: pathMatch[1],
+        comparablePath: normalizeComparableRoute(pathMatch[1]),
+        target: elementMatch ? elementMatch[1] : path.basename(file).replace(/\.(tsx|jsx|js|mjs)$/, ''),
+        guards: '-',
+        file: relFromRoot(ctx, file)
+      });
+    }
+  }
+  if (rows.length === 0) {
+    for (const pagesDir of [path.join(ctx.rootDir, 'src/pages'), path.join(ctx.rootDir, 'pages')].filter((p) => fs.existsSync(p))) {
+      const files = ctx.allFiles.filter((f) => /\.(tsx|jsx|js|mjs)$/.test(f) && isInside(f, pagesDir) && !isTestFile(relFromRoot(ctx, f))).sort();
+      for (const file of files) {
+        const segments = path.relative(pagesDir, file).replace(/\\/g, '/').split('/').filter(Boolean);
+        if (segments.some((seg) => seg.startsWith('_'))) continue;
+        const last = segments[segments.length - 1].replace(/\.(tsx|jsx|js|mjs)$/, '');
+        const routeSegs = [...segments.slice(0, -1), ...(last === 'index' ? [] : [last])].map((seg) => mapRouteSegment(seg));
+        const route = `/${routeSegs.join('/')}`.replace(/\/+/g, '/') || '/';
+        add({ path: route, comparablePath: normalizeComparableRoute(route), target: last, guards: '-', file: relFromRoot(ctx, file) });
+      }
+    }
+  }
+  return rows.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export function getShellScriptRows(ctx) {
+  if (!adapterEnabled(ctx, 'shell') || !ctx.detected.shell) return [];
+  const rows = ctx.allFiles
+    .filter((f) => /\.(sh|bash|zsh)$/.test(f) && !isTestFile(relFromRoot(ctx, f)))
+    .map((file) => {
+      const firstLine = read(file).split(/\r?\n/)[0] || '';
+      return { file: relFromRoot(ctx, file), lines: lineCount(file), shebang: firstLine.startsWith('#!') ? firstLine : '-' };
+    });
+  return rows.sort((a, b) => a.file.localeCompare(b.file));
+}
+
 export function extractEntityName(content, fallback) {
   const explicit = content.match(/@Entity\s*\(\s*(?:\{\s*name\s*:\s*)?['"]([^'"]+)['"]/s);
   if (explicit) return explicit[1];
@@ -742,7 +983,7 @@ export function getApiClientRows(ctx, routeRows) {
 }
 
 export function getTestRows(ctx) {
-  const sourceFiles = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs|php)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
+  const sourceFiles = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs|php|py|rs|swift|gd)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
   const testFiles = new Set(ctx.allFiles.filter((f) => isTestFile(relFromRoot(ctx, f))).map((f) => relFromRoot(ctx, f)));
   const testList = [...testFiles];
   return sourceFiles.map((file) => {
@@ -762,7 +1003,12 @@ export function getTestRows(ctx) {
       `${base}Test.php`,
       `${base}Spec.php`,
       `${dir}/${path.basename(base)}Test.php`,
-      `${dir}/__tests__/${path.basename(base)}Test.php`
+      `${dir}/__tests__/${path.basename(base)}Test.php`,
+      `${base}_test.py`,
+      `${dir}/test_${path.basename(base)}.py`,
+      `${base}Tests.swift`,
+      `${dir}/tests/${path.basename(base)}.rs`,
+      `${dir}/test_${path.basename(base)}.gd`
     ];
     let direct = directCandidates.find((candidate) => testFiles.has(candidate)) || '';
     if (!direct && ext === '.cs') {
@@ -791,7 +1037,13 @@ export function extractLandmarks(file) {
     [/\bclass\s+([A-Za-z0-9_]+)/, 'class'],
     [/\bfunction\s+([A-Za-z0-9_]+)\s*\(/, 'fn'],
     [/\bRoute::(get|post|put|patch|delete|options|match|any|resource|apiResource)\s*\(/i, 'route'],
-    [/\b(?:create|alter)(?:\s+or\s+alter)?\s+(?:procedure|proc|function|view|table|trigger)\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/i, 'sql']
+    [/\b(?:create|alter)(?:\s+or\s+alter)?\s+(?:procedure|proc|function|view|table|trigger)\s+((?:\[[^\]]+\]|[A-Za-z0-9_]+)(?:\.(?:\[[^\]]+\]|[A-Za-z0-9_]+))?)/i, 'sql'],
+    [/\bdef\s+([A-Za-z0-9_]+)\s*\(/, 'fn'],
+    [/\bclass\s+([A-Za-z0-9_]+)\s*[:.(]/, 'class'],
+    [/\bpub\s+(?:async\s+)?fn\s+([A-Za-z0-9_]+)/, 'fn'],
+    [/\bpub\s+(?:struct|enum|trait|mod)\s+([A-Za-z0-9_]+)/, 'type'],
+    [/\bfunc\s+([A-Za-z0-9_]+)\s*\(/, 'fn'],
+    [/^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{/, 'fn']
   ];
   for (let i = 0; i < lines.length; i += 1) {
     for (const [regex, label] of patterns) {
@@ -809,7 +1061,7 @@ export function extractLandmarks(file) {
 export function getLargeFileRows(ctx) {
   const threshold = Number(ctx.config.largeFileThreshold || 300);
   return ctx.allFiles
-    .filter((f) => /\.(ts|tsx|js|jsx|html|scss|css|json|resx|yml|yaml|cs|csproj|sql|sqlproj|php)$/.test(f))
+    .filter((f) => /\.(ts|tsx|js|jsx|html|scss|css|json|resx|yml|yaml|cs|csproj|sql|sqlproj|php|py|rs|swift|gd|astro|sh|bash|zsh|toml)$/.test(f))
     .map((file) => ({ file, rel: relFromRoot(ctx, file), lines: lineCount(file), landmarks: extractLandmarks(file) }))
     .filter((row) => row.lines >= threshold)
     .sort((a, b) => b.lines - a.lines || a.rel.localeCompare(b.rel));
@@ -937,8 +1189,10 @@ export function collectEnvConfigFiles(ctx) {
 }
 
 export function buildIndexModel(ctx) {
-  const routes = getRouteRows(ctx);
-  const pages = getPageRows(ctx);
+  const pythonRoutes = getPythonRouteRows(ctx);
+  const routes = [...pythonRoutes, ...getRouteRows(ctx)];
+  const astroPages = getAstroPageRows(ctx);
+  const pages = [...astroPages, ...getReactPageRows(ctx), ...getPageRows(ctx)];
   const entities = getEntityRows(ctx);
   const components = getComponentRows(ctx);
   const features = getFeatureRows(ctx, routes, entities, components);
@@ -947,6 +1201,11 @@ export function buildIndexModel(ctx) {
   const largeFiles = getLargeFileRows(ctx);
   const i18n = getI18nStats(ctx);
   const env = getEnvRows(ctx);
+  const pythonModules = getPythonModuleRows(ctx);
+  const rustCrates = getRustCrateRows(ctx);
+  const swiftTargets = getSwiftTargetRows(ctx);
+  const godotItems = getGodotRows(ctx);
+  const shellScripts = getShellScriptRows(ctx);
 
   return {
     meta: {
@@ -964,6 +1223,12 @@ export function buildIndexModel(ctx) {
     tests,
     largeFiles,
     i18n,
-    env
+    env,
+    pythonModules,
+    rustCrates,
+    swiftTargets,
+    godotItems,
+    astroPages,
+    shellScripts
   };
 }

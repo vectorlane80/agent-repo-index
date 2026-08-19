@@ -88,6 +88,35 @@ export function extractExports(content, filePath = '') {
       [/\bfunction\s+([A-Za-z0-9_]+)\s*\(/g, 'php function']
     );
   }
+  if (/\.py$/i.test(filePath)) {
+    patterns.push(
+      [/\bdef\s+([a-zA-Z_]\w*)\s*\(/g, 'py fn'],
+      [/\bclass\s+([a-zA-Z_]\w*)/g, 'py class']
+    );
+  }
+  if (/\.rs$/i.test(filePath)) {
+    patterns.push(
+      [/\bpub\s+(?:async\s+)?fn\s+(\w+)/g, 'rs fn'],
+      [/\bpub\s+(?:struct|enum|trait|mod|type)\s+(\w+)/g, 'rs type'],
+      [/\bpub\s+const\s+(\w+)/g, 'rs const']
+    );
+  }
+  if (/\.swift$/i.test(filePath)) {
+    patterns.push(
+      [/\b(?:public\s+|internal\s+)?func\s+(\w+)/g, 'swift fn'],
+      [/\b(?:public\s+)?(?:final\s+)?class\s+(\w+)/g, 'swift class'],
+      [/\b(?:public\s+)?(?:struct|enum|protocol|extension)\s+(\w+)/g, 'swift type']
+    );
+  }
+  if (/\.gd$/i.test(filePath)) {
+    patterns.push(
+      [/\bfunc\s+(\w+)\s*\(/g, 'gd fn'],
+      [/\bclass_name\s+(\w+)/g, 'gd class']
+    );
+  }
+  if (/\.(sh|bash|zsh)$/i.test(filePath)) {
+    patterns.push([/^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\)\s*\{/gm, 'sh fn']);
+  }
   const items = [];
   for (const [regex, label] of patterns) {
     let match;
@@ -97,7 +126,7 @@ export function extractExports(content, filePath = '') {
 }
 
 export function generateLibMd(ctx) {
-  const files = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs|sql|php)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
+  const files = ctx.allFiles.filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|cs|sql|php|py|rs|swift|gd|astro|sh|bash|zsh)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort();
   const lines = [heading(ctx, 'Library Exports'), ''];
   for (const file of files) {
     const exports = extractExports(read(file), file);
@@ -108,6 +137,56 @@ export function generateLibMd(ctx) {
     lines.push('');
   }
   if (lines.length === 2) lines.push('No exported/public symbols detected.', '');
+  return lines.join('\n');
+}
+
+export function generateLanguageMapMd(ctx, model) {
+  const pythonModules = model.pythonModules || [];
+  const rustCrates = model.rustCrates || [];
+  const swiftTargets = model.swiftTargets || [];
+  const godotItems = model.godotItems || [];
+  const astroPages = model.astroPages || [];
+  const shellScripts = model.shellScripts || [];
+  const lines = [heading(ctx, 'Language Map'), ''];
+  const allEmpty = pythonModules.length === 0 && rustCrates.length === 0 && swiftTargets.length === 0 && godotItems.length === 0 && astroPages.length === 0 && shellScripts.length === 0;
+  if (allEmpty) {
+    lines.push('No Python, Rust, Swift, Godot, Astro, or Shell code detected.', '');
+    return lines.join('\n');
+  }
+  lines.push('Non-JavaScript/TypeScript code modules: Python entrypoints, Rust crates, Swift targets, Godot scenes/scripts, Astro pages, Shell scripts.', '');
+  if (pythonModules.length) {
+    lines.push('## Python', '', '| File | Kind | Lines |', '|---|---|---:|');
+    const entrypoints = pythonModules.filter((row) => row.kind === 'entrypoint');
+    const modules = pythonModules.filter((row) => row.kind !== 'entrypoint').slice(0, 40);
+    for (const row of [...entrypoints, ...modules]) lines.push(`| ${row.file} | ${row.kind} | ${row.lines} |`);
+    lines.push('');
+  }
+  if (rustCrates.length) {
+    lines.push('## Rust Crates', '', '| Crate | Kind | Path |', '|---|---|---|');
+    for (const row of rustCrates) lines.push(`| ${code(row.crate)} | ${row.kind} | ${row.path} |`);
+    lines.push('');
+  }
+  if (swiftTargets.length) {
+    lines.push('## Swift Targets', '', '| Target | Path |', '|---|---|');
+    for (const row of swiftTargets) lines.push(`| ${code(row.target)} | ${row.path} |`);
+    lines.push('');
+  }
+  if (godotItems.length) {
+    lines.push('## Godot', '', '| Kind | Name | Path |', '|---|---|---|');
+    const order = { autoload: 0, script: 1, scene: 2 };
+    for (const row of [...godotItems].sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9) || a.path.localeCompare(b.path))) lines.push(`| ${row.kind} | ${code(row.name)} | ${row.path} |`);
+    lines.push('');
+  }
+  if (astroPages.length) {
+    lines.push('## Astro Pages', '', '| Route | File |', '|---|---|');
+    for (const row of astroPages) lines.push(`| ${code(row.path)} | ${row.file} |`);
+    lines.push('');
+  }
+  if (shellScripts.length) {
+    lines.push('## Shell Scripts', '', '| File | Lines | Shebang |', '|---|---:|---|');
+    for (const row of shellScripts) lines.push(`| ${row.file} | ${row.lines} | ${code(row.shebang)} |`);
+    lines.push('');
+  }
   return lines.join('\n');
 }
 
@@ -213,6 +292,12 @@ export function generateStartHereMd(ctx, counts) {
   lines.push('| Config/deployment work | `env-config.md` | Pipeline, deployment, Docker, package, and env files |');
   lines.push('| Test planning | `test-map.md` | Direct or nearby spec/test files |');
   lines.push('| Large-file edits | `large-files.md` | Jump to listed landmarks before reading entire file |');
+  lines.push('| Python backend/script work | `language-map.md` | Entrypoint files, matching modules |');
+  lines.push('| Rust crate work | `language-map.md` | Crate sources under the listed path |');
+  lines.push('| Swift target work | `language-map.md` | Sources under the listed target path |');
+  lines.push('| Godot scene/script work | `language-map.md` | Matching .gd/.tscn files |');
+  lines.push('| Astro/React page work | `pages.md` | `language-map.md`, matching page component |');
+  lines.push('| Shell script work | `language-map.md` | Matching script file |');
   lines.push('', '## Generated Inventory', '');
   for (const [label, count] of Object.entries(counts)) lines.push(`- ${label}: ${count}`);
   lines.push('', '## Detected Adapters', '');
@@ -230,7 +315,13 @@ export function getInventoryCounts(model) {
     'Feature groups': model.features.length,
     'Frontend HTTP calls': model.apiClients.length,
     'Large files': model.largeFiles.length,
-    'Env/config variables': model.env.length
+    'Env/config variables': model.env.length,
+    'Python modules': (model.pythonModules || []).length,
+    'Rust crates': (model.rustCrates || []).length,
+    'Swift targets': (model.swiftTargets || []).length,
+    'Godot items': (model.godotItems || []).length,
+    'Astro pages': (model.astroPages || []).length,
+    'Shell scripts': (model.shellScripts || []).length
   };
 }
 
@@ -242,6 +333,7 @@ export function renderOutputs(ctx, model) {
     'schema.md': generateSchemaMd(ctx, model.entities),
     'components.md': generateComponentsMd(ctx, model.components),
     'lib.md': generateLibMd(ctx),
+    'language-map.md': generateLanguageMapMd(ctx, model),
     'feature-map.md': generateFeatureMapMd(ctx, model.features),
     'api-client-map.md': generateApiClientMapMd(ctx, model.apiClients),
     'test-map.md': generateTestMapMd(ctx, model.tests),
