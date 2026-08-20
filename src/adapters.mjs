@@ -354,19 +354,273 @@ export function getPageRows(ctx) {
   return rows.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function skipPythonString(content, start) {
+  const quote = content[start];
+  const triple = content.slice(start, start + 3) === quote.repeat(3);
+  let i = start + (triple ? 3 : 1);
+  while (i < content.length) {
+    if (content[i] === '\\') { i += 2; continue; }
+    if (triple) {
+      if (content.slice(i, i + 3) === quote.repeat(3)) return i + 3;
+      i += 1;
+    } else if (content[i] === quote) {
+      return i + 1;
+    } else {
+      i += 1;
+    }
+  }
+  return content.length;
+}
+
+function matchPythonParens(content, open) {
+  let depth = 1;
+  let i = open + 1;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === '#') { while (i < content.length && content[i] !== '\n') i += 1; continue; }
+    if (ch === '"' || ch === "'") { i = skipPythonString(content, i); continue; }
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+    i += 1;
+  }
+  return -1;
+}
+
+function findPythonRouteCalls(content) {
+  const calls = [];
+  let i = 0;
+  const n = content.length;
+  while (i < n) {
+    const ch = content[i];
+    if (ch === '#') { while (i < n && content[i] !== '\n') i += 1; continue; }
+    if (ch === '"' || ch === "'") { i = skipPythonString(content, i); continue; }
+    if (ch === '@') {
+      const lineStart = content.lastIndexOf('\n', i - 1) + 1;
+      if (/^[ \t]*$/.test(content.slice(lineStart, i))) {
+        const m = content.slice(i + 1, i + 80).match(/^([A-Za-z_][A-Za-z0-9_.]*)/);
+        if (m) {
+          let j = i + 1 + m[0].length;
+          while (j < n && /[ \t]/.test(content[j])) j += 1;
+          if (content[j] === '(') {
+            const close = matchPythonParens(content, j);
+            if (close !== -1) {
+              calls.push({ kind: 'decorator', start: i, decorator: m[1], args: content.slice(j + 1, close) });
+              i = close + 1;
+              continue;
+            }
+          }
+        }
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === 'p' && content.startsWith('path(', i)) {
+      const before = i === 0 ? '' : content[i - 1];
+      if (!/[A-Za-z0-9_.]/.test(before)) {
+        const close = matchPythonParens(content, i + 4);
+        if (close !== -1) {
+          calls.push({ kind: 'path', start: i, args: content.slice(i + 5, close) });
+          i = close + 1;
+          continue;
+        }
+      }
+    }
+    i += 1;
+  }
+  return calls;
+}
+
+function splitPythonArgs(args) {
+  const out = [];
+  let start = 0;
+  let depth = 0;
+  let quote = '';
+  let escaped = false;
+  const commentSpans = [];
+  const pushItem = (end) => {
+    // Comments are never part of an argument's semantic text: a comment may
+    // sit between a list item and its trailing comma (e.g. ["GET" # keep\n, "POST"]),
+    // so strip every comment span contained in the slice before emitting it.
+    let text = args.slice(start, end);
+    for (let k = commentSpans.length - 1; k >= 0; k -= 1) {
+      const [cs, ce] = commentSpans[k];
+      if (cs >= start && ce <= end) text = text.slice(0, cs - start) + text.slice(ce - start);
+    }
+    out.push(text.trim());
+    start = end + 1;
+  };
+  for (let i = 0; i < args.length; i += 1) {
+    const ch = args[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === '#') {
+      const commentStart = i;
+      while (i < args.length && args[i] !== '\n') i += 1;
+      commentSpans.push([commentStart, i]);
+      if (depth === 0 && args.slice(start, commentStart).trim() === '') start = i + 1;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
+    if (ch === ',' && depth === 0) {
+      pushItem(i);
+    }
+  }
+  pushItem(args.length);
+  return out.filter(Boolean);
+}
+
+function decodePythonEscapes(body) {
+  // Decode the escapes Python defines for str/bytes literals; unknown escapes
+  // (e.g. \/) keep the backslash, exactly as CPython does, so the result is
+  // never semantically wrong. Incomplete \x/\u/\U sequences and \N{name}
+  // (which would need the Unicode name table) are invalid/unsupported here,
+  // so the literal is explicitly rejected by returning null.
+  let out = '';
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (ch !== '\\') { out += ch; continue; }
+    i += 1;
+    const e = body[i];
+    if (e === undefined) { out += '\\'; break; }
+    switch (e) {
+      case '\\': out += '\\'; break;
+      case "'": out += "'"; break;
+      case '"': out += '"'; break;
+      case 'n': out += '\n'; break;
+      case 'r': out += '\r'; break;
+      case 't': out += '\t'; break;
+      case 'b': out += '\b'; break;
+      case 'f': out += '\f'; break;
+      case 'v': out += '\v'; break;
+      case 'a': out += '\x07'; break;
+      case '0': case '1': case '2': case '3':
+      case '4': case '5': case '6': case '7': {
+        let oct = e;
+        while (oct.length < 3 && /[0-7]/.test(body[i + 1] || '')) { i += 1; oct += body[i]; }
+        out += String.fromCharCode(parseInt(oct, 8));
+        break;
+      }
+      case 'x': {
+        const hex = body.slice(i + 1, i + 3);
+        if (!/^[0-9a-fA-F]{2}$/.test(hex)) return null;
+        out += String.fromCharCode(parseInt(hex, 16));
+        i += 2;
+        break;
+      }
+      case 'u': {
+        const hex = body.slice(i + 1, i + 5);
+        if (!/^[0-9a-fA-F]{4}$/.test(hex)) return null;
+        out += String.fromCharCode(parseInt(hex, 16));
+        i += 4;
+        break;
+      }
+      case 'U': {
+        const hex = body.slice(i + 1, i + 9);
+        if (!/^[0-9a-fA-F]{8}$/.test(hex)) return null;
+        const cp = parseInt(hex, 16);
+        if (cp > 0x10ffff) return null;
+        out += String.fromCodePoint(cp);
+        i += 8;
+        break;
+      }
+      case 'N': return null;
+      default: out += `\\${e}`;
+    }
+  }
+  return out;
+}
+
+function parsePythonStringLiteral(raw) {
+  const value = String(raw || '').trim();
+  const m = value.match(/^([rRbBuUfF]*)(['\"])((?:\\.|(?!\2)[\s\S])*)\2$/);
+  if (!m) return null;
+  if (m[1].toLowerCase().includes('f')) return null;
+  const body = m[3];
+  // A triple-quoted string (\"\"\"...\"\"\" or '''...''') is not a single simple
+  // literal; emitting it would fabricate a corrupted path, so reject it.
+  if (body.startsWith(m[2].repeat(2))) return null;
+  const decoded = m[1].toLowerCase().includes('r') ? body : decodePythonEscapes(body);
+  if (decoded === null) return null;
+  return { value: decoded };
+}
+
+function parsePythonMethodsLiteral(raw) {
+  const value = String(raw || '').trim();
+  const open = value[0];
+  const close = open === '[' ? ']' : open === '(' ? ')' : '';
+  if (!close || value[value.length - 1] !== close) return null;
+  const items = splitPythonArgs(value.slice(1, -1));
+  if (items.length === 0) return null;
+  const methods = [];
+  for (const item of items) {
+    const m = item.match(/^(['"])([A-Za-z][A-Za-z0-9_-]*)\1$/);
+    if (!m) return null;
+    methods.push(m[2].toUpperCase());
+  }
+  return methods;
+}
+
+function parsePythonRouteArgs(argsText) {
+  const args = splitPythonArgs(argsText);
+  const positional = [];
+  const kwargs = new Map();
+  for (const arg of args) {
+    const kw = arg.match(/^([A-Za-z_]\w*)\s*=/);
+    if (kw) kwargs.set(kw[1], arg.slice(kw[0].length).trim());
+    else positional.push(arg);
+  }
+  return {
+    path: parsePythonStringLiteral(positional[0] || ''),
+    methodsSpecified: kwargs.has('methods'),
+    methodsRaw: kwargs.get('methods') || ''
+  };
+}
+
 export function extractPythonRoutes(content) {
   const rows = [];
   const push = (method, rawPath, index) => {
     const clean = rawPath.replace(/\{([A-Za-z0-9_]+)\}/g, ':$1').replace(/\/+/g, '/').replace(/\/$/, '');
     rows.push({ method, path: clean.startsWith('/') ? clean : `/${clean}`, index });
   };
-  const fastapiRegex = /@(?:app|router)\.(get|post|put|patch|delete|options|head)\s*\(\s*['"]([^'"]+)['"]/g;
-  let match;
-  while ((match = fastapiRegex.exec(content)) !== null) push(match[1].toUpperCase(), match[2], match.index);
-  const flaskRegex = /@(?:app|blueprint)\.route\(\s*['"]([^'"]+)['"]\s*(?:,\s*methods\s*=\s*\[?['"]([A-Z]+)['"]\]?)?/g;
-  while ((match = flaskRegex.exec(content)) !== null) push(match[2] ? match[2].toUpperCase() : 'GET', match[1], match.index);
-  const djangoRegex = /path\(\s*['"]([^'"]+)['"]\s*,\s*([A-Za-z0-9_\.]+)/g;
-  while ((match = djangoRegex.exec(content)) !== null) push('GET', match[1], match.index);
+  const verbMethods = { get: 'GET', post: 'POST', put: 'PUT', patch: 'PATCH', delete: 'DELETE', options: 'OPTIONS', head: 'HEAD', trace: 'TRACE' };
+  for (const call of findPythonRouteCalls(content)) {
+    if (call.kind === 'decorator') {
+      const parts = call.decorator.split('.');
+      const name = parts[parts.length - 1];
+      const owner = parts.slice(0, -1).join('.');
+      if (!/^(app|router|blueprint|bp)$/.test(owner)) continue;
+      const isRoute = name === 'route' || name === 'api_route';
+      if (!isRoute && !verbMethods[name]) continue;
+      const parsed = parsePythonRouteArgs(call.args);
+      if (!parsed.path) continue;
+      let methods;
+      if (parsed.methodsSpecified) {
+        methods = parsePythonMethodsLiteral(parsed.methodsRaw);
+        if (!methods) continue;
+      } else if (isRoute) {
+        methods = ['GET'];
+      } else {
+        methods = [verbMethods[name]];
+      }
+      for (const method of methods) push(method, parsed.path.value, call.start);
+    } else if (call.kind === 'path') {
+      const args = splitPythonArgs(call.args);
+      const pathLiteral = parsePythonStringLiteral(args[0] || '');
+      const viewRef = String(args[1] || '').trim();
+      if (!pathLiteral) continue;
+      if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(viewRef)) continue;
+      push('GET', pathLiteral.value, call.start);
+    }
+  }
   return rows;
 }
 
@@ -528,6 +782,127 @@ export function getAstroPageRows(ctx) {
   return rows.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function skipJsString(content, start) {
+  const quote = content[start];
+  let i = start + 1;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === '\\') { i += 2; continue; }
+    if (quote === '`' && ch === '$' && content[i + 1] === '{') { i = skipJsBraced(content, i + 1); continue; }
+    if (ch === quote) return i + 1;
+    i += 1;
+  }
+  return content.length;
+}
+
+function skipJsBraced(content, openBrace) {
+  let depth = 1;
+  let i = openBrace + 1;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === '"' || ch === "'" || ch === '`') { i = skipJsString(content, i); continue; }
+    if (ch === '/' && content[i + 1] === '/') { while (i < content.length && content[i] !== '\n') i += 1; continue; }
+    if (ch === '/' && content[i + 1] === '*') { const end = content.indexOf('*/', i + 2); i = end === -1 ? content.length : end + 2; continue; }
+    if (ch === '{') depth += 1;
+    if (ch === '}') { depth -= 1; if (depth === 0) return i + 1; }
+    i += 1;
+  }
+  return content.length;
+}
+
+function matchJsParens(content, open) {
+  let depth = 1;
+  let i = open + 1;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === '"' || ch === "'" || ch === '`') { i = skipJsString(content, i); continue; }
+    if (ch === '/' && content[i + 1] === '/') { while (i < content.length && content[i] !== '\n') i += 1; continue; }
+    if (ch === '/' && content[i + 1] === '*') { const end = content.indexOf('*/', i + 2); i = end === -1 ? content.length : end + 2; continue; }
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+    i += 1;
+  }
+  return -1;
+}
+
+function extractTanStackObjectPath(argsText) {
+  let depth = 0;
+  let i = 0;
+  const n = argsText.length;
+  while (i < n) {
+    const ch = argsText[i];
+    if (ch === '"' || ch === "'" || ch === '`') { i = skipJsString(argsText, i); continue; }
+    if (ch === '/' && argsText[i + 1] === '/') { while (i < n && argsText[i] !== '\n') i += 1; continue; }
+    if (ch === '/' && argsText[i + 1] === '*') { const end = argsText.indexOf('*/', i + 2); i = end === -1 ? n : end + 2; continue; }
+    if (ch === '{') depth += 1;
+    if (ch === '}') depth -= 1;
+    if (depth === 1 && argsText.startsWith('path', i) && !/[A-Za-z0-9_$]/.test(argsText[i - 1] || '') && /\s*:/.test(argsText.slice(i + 4, i + 8))) {
+      let j = i + 4;
+      while (j < n && /\s/.test(argsText[j])) j += 1;
+      if (argsText[j] !== ':') { i += 1; continue; }
+      j += 1;
+      while (j < n && /\s/.test(argsText[j])) j += 1;
+      const q = argsText[j];
+      if (q !== '"' && q !== "'") return '';
+      let k = j + 1;
+      let value = '';
+      let escaped = false;
+      for (; k < n; k += 1) {
+        const c = argsText[k];
+        if (escaped) { value += c; escaped = false; }
+        else if (c === '\\') escaped = true;
+        else if (c === q) break;
+        else value += c;
+      }
+      if (k >= n) return '';
+      return value;
+    }
+    i += 1;
+  }
+  return '';
+}
+
+export function extractTanStackRoutes(content) {
+  const rows = [];
+  const push = (rawPath, index) => {
+    const normalized = rawPath.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, ':$1').replace(/\/+/g, '/').replace(/\/$/, '');
+    rows.push({ path: normalized.startsWith('/') ? normalized : `/${normalized}`, index });
+  };
+  let i = 0;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === '"' || ch === "'" || ch === '`') { i = skipJsString(content, i); continue; }
+    if (ch === '/' && content[i + 1] === '/') { while (i < content.length && content[i] !== '\n') i += 1; continue; }
+    if (ch === '/' && content[i + 1] === '*') { const end = content.indexOf('*/', i + 2); i = end === -1 ? content.length : end + 2; continue; }
+    const ident = content.slice(i).match(/^[A-Za-z_$][A-Za-z0-9_$]*/);
+    if (!ident) { i += 1; continue; }
+    if (ident[0] === 'createFileRoute' || ident[0] === 'createRoute') {
+      let j = i + ident[0].length;
+      while (j < content.length && /\s/.test(content[j])) j += 1;
+      if (content[j] === '(') {
+        const close = matchJsParens(content, j);
+        if (close !== -1) {
+          const argsText = content.slice(j + 1, close);
+          if (ident[0] === 'createFileRoute') {
+            const m = argsText.trim().match(/^(['"])([\s\S]*?)\1$/);
+            if (m) push(m[2], i);
+          } else {
+            const pathValue = extractTanStackObjectPath(argsText);
+            if (pathValue) push(pathValue, i);
+          }
+          i = close + 1;
+          continue;
+        }
+      }
+    }
+    i += ident[0].length;
+  }
+  return rows;
+}
+
 export function getReactPageRows(ctx) {
   if (!adapterEnabled(ctx, 'react') || !ctx.detected.react) return [];
   const rows = [];
@@ -568,17 +943,30 @@ export function getReactPageRows(ctx) {
       });
     }
   }
-  if (rows.length === 0) {
-    for (const pagesDir of [path.join(ctx.rootDir, 'src/pages'), path.join(ctx.rootDir, 'pages')].filter((p) => fs.existsSync(p))) {
-      const files = ctx.allFiles.filter((f) => /\.(tsx|jsx|js|mjs)$/.test(f) && isInside(f, pagesDir) && !isTestFile(relFromRoot(ctx, f))).sort();
-      for (const file of files) {
-        const segments = path.relative(pagesDir, file).replace(/\\/g, '/').split('/').filter(Boolean);
-        if (segments.some((seg) => seg.startsWith('_'))) continue;
-        const last = segments[segments.length - 1].replace(/\.(tsx|jsx|js|mjs)$/, '');
-        const routeSegs = [...segments.slice(0, -1), ...(last === 'index' ? [] : [last])].map((seg) => mapRouteSegment(seg));
-        const route = `/${routeSegs.join('/')}`.replace(/\/+/g, '/') || '/';
-        add({ path: route, comparablePath: normalizeComparableRoute(route), target: last, guards: '-', file: relFromRoot(ctx, file) });
-      }
+  for (const file of ctx.allFiles.filter((f) => /\.(tsx|jsx|js|mjs)$/.test(f) && !isTestFile(relFromRoot(ctx, f))).sort()) {
+    const content = read(file);
+    for (const route of extractTanStackRoutes(content)) {
+      add({
+        path: route.path,
+        comparablePath: normalizeComparableRoute(route.path),
+        target: path.basename(file).replace(/\.(tsx|jsx|js|mjs)$/, ''),
+        guards: '-',
+        file: relFromRoot(ctx, file)
+      });
+    }
+  }
+  // Always merge the src/pages fallback with every other route source: TanStack,
+  // JSX <Route>, and app-router rows must not suppress pages/ or src/pages rows.
+  // Exact duplicates are still removed by the comparablePath-based add() dedup.
+  for (const pagesDir of [path.join(ctx.rootDir, 'src/pages'), path.join(ctx.rootDir, 'pages')].filter((p) => fs.existsSync(p))) {
+    const files = ctx.allFiles.filter((f) => /\.(tsx|jsx|js|mjs)$/.test(f) && isInside(f, pagesDir) && !isTestFile(relFromRoot(ctx, f))).sort();
+    for (const file of files) {
+      const segments = path.relative(pagesDir, file).replace(/\\/g, '/').split('/').filter(Boolean);
+      if (segments.some((seg) => seg.startsWith('_'))) continue;
+      const last = segments[segments.length - 1].replace(/\.(tsx|jsx|js|mjs)$/, '');
+      const routeSegs = [...segments.slice(0, -1), ...(last === 'index' ? [] : [last])].map((seg) => mapRouteSegment(seg));
+      const route = `/${routeSegs.join('/')}`.replace(/\/+/g, '/') || '/';
+      add({ path: route, comparablePath: normalizeComparableRoute(route), target: last, guards: '-', file: relFromRoot(ctx, file) });
     }
   }
   return rows.sort((a, b) => a.path.localeCompare(b.path));
